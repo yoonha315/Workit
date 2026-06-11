@@ -3,9 +3,11 @@ Workit - 법령 KB 구축
 법령 JSON → 청킹 → taxonomy 매핑 → Qdrant 저장
 
 실행 전 설치:
-    pip install qdrant-client sentence-transformers transformers numpy
+    pip install qdrant-client sentence-transformers numpy
 """
 
+import argparse
+import hashlib
 import json
 import uuid
 from pathlib import Path
@@ -14,27 +16,43 @@ from collections import defaultdict
 import numpy as np
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
-from transformers import AutoTokenizer
+from qdrant_client.models import Filter, FieldCondition, MatchValue
 from sentence_transformers import SentenceTransformer
 
 
 # ──────────────────────────────────────────
 # 0. 설정
 # ──────────────────────────────────────────
-DATA_DIR      = Path("data/structured")
-QDRANT_PATH   = "./qdrant_storage"
-COLLECTION    = "law_kb"
-EMBED_MODEL   = "BAAI/bge-m3"
-MAX_TOKENS    = 1024
-MIN_TOKENS    = 30
+DATA_DIR    = Path("data/structured")
+QDRANT_HOST = "localhost"
+QDRANT_PORT = 6333
+COLLECTION  = "law_kb"
+EMBED_MODEL = "BAAI/bge-m3"
+MAX_TOKENS  = 1024
+MIN_TOKENS  = 30
 
 # 법령 파일명 → (law_name, law_type) 매핑
 LAW_META = {
-    "소프트웨어_진흥법.json":                              {"law_name": "소프트웨어 진흥법",              "law_type": "법률"},
-    "지방계약법.json":                                    {"law_name": "지방계약법",                    "law_type": "법률"},
-    "지방계약법_시행규칙.json":                            {"law_name": "지방계약법 시행규칙",             "law_type": "시행규칙"},
-    "지방계약법_시행령.json":                              {"law_name": "지방계약법 시행령",               "law_type": "시행령"},
-    "지방자치단체 용역계약 일반조건 (행안부 예규).json":       {"law_name": "지방자치단체 용역계약 일반조건",   "law_type": "예규"},
+    "소프트웨어_진흥법.json": {
+        "law_name": "소프트웨어 진흥법",
+        "law_type": "법률",
+    },
+    "지방계약법.json": {
+        "law_name": "지방계약법",
+        "law_type": "법률",
+    },
+    "지방계약법_시행규칙.json": {
+        "law_name": "지방계약법 시행규칙",
+        "law_type": "시행규칙",
+    },
+    "지방계약법_시행령.json": {
+        "law_name": "지방계약법 시행령",
+        "law_type": "시행령",
+    },
+    "지방자치단체 용역계약 일반조건 (행안부 예규).json": {
+        "law_name": "지방자치단체 용역계약 일반조건",
+        "law_type": "예규",
+    },
 }
 
 # taxonomy: 9개 리스크 유형 + 법령 조문 매핑
@@ -114,12 +132,10 @@ TAXONOMY = [
 
 # ──────────────────────────────────────────
 # 1. taxonomy 역인덱스 빌드
-#    (filename, article_id) → [risk_id, risk_name, ...]
 # ──────────────────────────────────────────
 def build_risk_index(taxonomy: list[dict]) -> dict:
     """
     반환: { (filename, article_id): [{"risk_id": ..., "risk_name": ...}, ...] }
-    하나의 조문이 여러 리스크에 매핑될 수 있으므로 list로 관리
     """
     index = defaultdict(list)
     for risk in taxonomy:
@@ -161,15 +177,17 @@ def measure_token_distribution(articles: list[dict], tokenizer) -> dict:
 # ──────────────────────────────────────────
 SEPARATORS = ["\n\n", "\n", ". ", " "]
 
+
 def count_tokens(text: str, tokenizer) -> int:
     return len(tokenizer.encode(text))
+
 
 def recursive_split(text: str, tokenizer, sep_index: int = 0) -> list[str]:
     if count_tokens(text, tokenizer) <= MAX_TOKENS:
         return [text.strip()] if text.strip() else []
     if sep_index >= len(SEPARATORS):
         return [text.strip()]
-    sep = SEPARATORS[sep_index]
+    sep   = SEPARATORS[sep_index]
     parts = [p for p in text.split(sep) if p.strip()]
     if len(parts) <= 1:
         return recursive_split(text, tokenizer, sep_index + 1)
@@ -183,7 +201,15 @@ def recursive_split(text: str, tokenizer, sep_index: int = 0) -> list[str]:
 
 
 # ──────────────────────────────────────────
-# 5. 청크 생성 + 메타데이터 태깅
+# 5. chunk_id 생성 (해시 기반 — 멱등 upsert 보장)
+# ──────────────────────────────────────────
+def make_chunk_id(law_name: str, article_id: str, sub_index: int) -> str:
+    raw = f"{law_name}::{article_id}::{sub_index}"
+    return str(uuid.UUID(hashlib.md5(raw.encode()).hexdigest()))
+
+
+# ──────────────────────────────────────────
+# 6. 청크 생성 + 메타데이터 태깅
 # ──────────────────────────────────────────
 def chunk_articles(
     articles:   list[dict],
@@ -205,7 +231,7 @@ def chunk_articles(
 
         # taxonomy 매핑 조회
         key        = (filename, article_id)
-        risk_hits  = risk_index.get(key, [])           # 없으면 빈 리스트
+        risk_hits  = risk_index.get(key, [])
         risk_ids   = [r["risk_id"]   for r in risk_hits]
         risk_names = [r["risk_name"] for r in risk_hits]
 
@@ -220,23 +246,22 @@ def chunk_articles(
                 continue
 
             chunk = {
-                # ── 식별 ──────────────────────────────
-                "chunk_id":       str(uuid.uuid4()),
+                # ── 식별 ──────────────────────────────────
+                "chunk_id":       make_chunk_id(law_meta["law_name"], article_id, idx),
                 "source_type":    "law",
-                # ── 법령 정보 ─────────────────────────
+                # ── 법령 정보 ──────────────────────────────
                 "law_name":       law_meta["law_name"],
                 "law_type":       law_meta["law_type"],
                 "article_id":     article_id,
                 "article_number": article_number,
                 "article_title":  title,
                 "source_full":    f"{law_meta['law_name']} {article_number}",
-                # ── 리스크 매핑 ───────────────────────
-                # 매핑 없으면 빈 리스트 → Qdrant 필터에서 제외 가능
+                # ── 리스크 매핑 ────────────────────────────
                 "risk_ids":       risk_ids,
                 "risk_names":     risk_names,
-                "is_risk_ref":    len(risk_hits) > 0,   # 빠른 필터용 bool
-                # ── 청크 정보 ─────────────────────────
-                "chunk_text":     chunk_text,
+                "is_risk_ref":    len(risk_hits) > 0,
+                # ── 청크 정보 ──────────────────────────────
+                "text":           chunk_text,       # ← 통일된 키
                 "chunk_tokens":   count_tokens(chunk_text, tokenizer),
                 "sub_index":      idx,
             }
@@ -246,68 +271,92 @@ def chunk_articles(
 
 
 # ──────────────────────────────────────────
-# 6. Qdrant 저장
+# 7. Qdrant — ensure 방식 초기화
 # ──────────────────────────────────────────
-def init_qdrant(embed_dim: int) -> QdrantClient:
-    client = QdrantClient(path=QDRANT_PATH)
-
+def ensure_collection(client: QdrantClient, embed_dim: int, reset: bool = False) -> None:
     existing = [c.name for c in client.get_collections().collections]
 
-    if COLLECTION in existing:
+    if reset and COLLECTION in existing:
         client.delete_collection(collection_name=COLLECTION)
-        print(f"🗑️ 기존 컬렉션 삭제: {COLLECTION}")
+        print(f"🗑️  컬렉션 초기화: {COLLECTION}")
+        existing = []
 
-    client.create_collection(
-        collection_name=COLLECTION,
-        vectors_config=VectorParams(size=embed_dim, distance=Distance.COSINE),
-    )
-
-    print(f"✅ 컬렉션 생성: {COLLECTION} (dim={embed_dim})")
-    return client
-
-
-def store_chunks(client: QdrantClient, chunks: list[dict], model) -> None:
-    texts = [c["chunk_text"] for c in chunks]
-    print(f"  임베딩 생성 중... ({len(texts)}개)")
-    embeddings = model.encode(texts, batch_size=32, show_progress_bar=True)
-
-    points = []
-    for chunk, vector in zip(chunks, embeddings):
-        payload = {k: v for k, v in chunk.items() if k != "chunk_id"}
-        points.append(PointStruct(
-            id=chunk["chunk_id"],
-            vector=vector.tolist(),
-            payload=payload,
-        ))
-
-    for i in range(0, len(points), 100):
-        client.upsert(collection_name=COLLECTION, points=points[i:i+100])
-    print(f"  ✅ {len(points)}개 청크 저장")
+    if COLLECTION not in existing:
+        client.create_collection(
+            collection_name=COLLECTION,
+            vectors_config=VectorParams(size=embed_dim, distance=Distance.COSINE),
+        )
+        print(f"✅ 컬렉션 생성: {COLLECTION} (dim={embed_dim})")
+    else:
+        print(f"✅ 컬렉션 기존 사용: {COLLECTION}")
 
 
 # ──────────────────────────────────────────
-# 7. 메인
+# 8. 청크 저장 — 배치 임베딩
+# ──────────────────────────────────────────
+def store_chunks(
+    client:     QdrantClient,
+    chunks:     list[dict],
+    model:      SentenceTransformer,
+    batch_size: int = 32,
+) -> None:
+    texts      = [c["text"] for c in chunks]           # ← 통일된 키
+    all_points = []
+
+    print(f"  임베딩 생성 중... ({len(texts)}개)")
+    for i in range(0, len(texts), batch_size):
+        batch_vecs = model.encode(
+            texts[i:i + batch_size],
+            normalize_embeddings=True,
+            show_progress_bar=False,
+        )
+        for j, vec in enumerate(batch_vecs):
+            chunk   = chunks[i + j]
+            payload = {k: v for k, v in chunk.items() if k != "chunk_id"}
+            all_points.append(PointStruct(
+                id=chunk["chunk_id"],
+                vector=vec.tolist(),
+                payload=payload,
+            ))
+
+    for i in range(0, len(all_points), 100):
+        client.upsert(collection_name=COLLECTION, points=all_points[i:i + 100])
+    print(f"  ✅ {len(all_points)}개 청크 저장")
+
+
+# ──────────────────────────────────────────
+# 9. 메인
 # ──────────────────────────────────────────
 def main():
+    ap = argparse.ArgumentParser(description="Workit 법령 KB 구축")
+    ap.add_argument(
+        "--reset",
+        action="store_true",
+        help="컬렉션 삭제 후 재구축 (기본값: 기존 컬렉션 유지하며 upsert)",
+    )
+    args = ap.parse_args()
+
     print("=" * 60)
     print("Workit 법령 KB 구축")
     print("=" * 60)
 
-    # 모델 로드
+    # 모델 로드 — SentenceTransformer 내장 tokenizer 재사용
     print(f"\n📦 모델 로드: {EMBED_MODEL}")
     print("  (첫 실행 시 약 2GB 다운로드)")
-    tokenizer   = AutoTokenizer.from_pretrained(EMBED_MODEL)
     embed_model = SentenceTransformer(EMBED_MODEL)
+    tokenizer   = embed_model.tokenizer           # ← AutoTokenizer 별도 로드 불필요
     embed_dim   = embed_model.get_sentence_embedding_dimension()
     print(f"  임베딩 차원: {embed_dim}")
 
-    # taxonomy 역인덱스 빌드
+    # taxonomy 역인덱스
     risk_index = build_risk_index(TAXONOMY)
     print(f"\n📋 taxonomy 로드: {len(TAXONOMY)}개 리스크 유형")
     print(f"   매핑된 조문 수: {len(risk_index)}개")
 
     # Qdrant 초기화
-    client      = init_qdrant(embed_dim)
+    client = QdrantClient(host="localhost", port=6333)
+    ensure_collection(client, embed_dim, reset=args.reset)
+
     total       = 0
     risk_tagged = 0
 
@@ -342,25 +391,16 @@ def main():
     print(f"   리스크 태깅된 청크: {risk_tagged}개")
     count = client.count(collection_name=COLLECTION)
     print(f"   Qdrant 저장: {count.count}개")
-    print(f"   저장 위치: {QDRANT_PATH}")
+    print(f"   Qdrant: {QDRANT_HOST}:{QDRANT_PORT}")
 
-    # 검색 테스트 — 리스크 태깅된 것만 필터링
+    # 검색 테스트
     print(f"\n🔍 검색 테스트: '지연배상금 한도' (리스크 조문만)")
-
-    from qdrant_client.models import Filter, FieldCondition, MatchValue
-
-    query_vec = embed_model.encode("지연배상금 한도")
-
-    results = client.query_points(
+    query_vec = embed_model.encode("지연배상금 한도", normalize_embeddings=True)
+    results   = client.query_points(
         collection_name=COLLECTION,
         query=query_vec.tolist(),
         query_filter=Filter(
-            must=[
-                FieldCondition(
-                    key="is_risk_ref",
-                    match=MatchValue(value=True)
-                )
-            ]
+            must=[FieldCondition(key="is_risk_ref", match=MatchValue(value=True))]
         ),
         limit=3,
     ).points
@@ -369,7 +409,7 @@ def main():
         risk_str = ", ".join(r.payload.get("risk_names", [])) or "—"
         print(f"  [{i}] score={r.score:.4f} | {r.payload['source_full']}")
         print(f"       리스크: {risk_str}")
-        print(f"       {r.payload['chunk_text'][:80]}...")
+        print(f"       {r.payload['text'][:80]}...")      # ← 통일된 키
 
 
 if __name__ == "__main__":
