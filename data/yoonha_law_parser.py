@@ -5,7 +5,7 @@ output: C:/project/Workit/data/structured/ 내 JSON 파일
 
 사용법:
     pip install python-docx pywin32
-    python parse_law_to_json.py
+    python yoonha_law_parser.py
 """
 
 import os
@@ -18,7 +18,7 @@ import win32com.client
 # ─────────────────────────────────────────
 # 경로 설정
 # ─────────────────────────────────────────
-LAW_DIR = Path("C:/project/Workit/data/law")
+LAW_DIR    = Path("C:/project/Workit/data/law")
 OUTPUT_DIR = Path("C:/project/Workit/data/structured")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -34,17 +34,17 @@ REF_ARTICLE = [
     "제7절 제4항 다",
     "제7절 제5항 가",
     "제8절 제7항 가",
-    "제59조",   # 소프트웨어 진흥법
-    "제75조",   # 지방계약법 시행규칙
+    "제59조",
+    "제75조",
 ]
 
 UPPER_LAW = [
-    "제90조",   # 지방계약법 시행령
-    "제75조",   # 지방계약법 시행규칙
-    "제27조",   # 지방계약법
-    "제50조",   # 소프트웨어 진흥법
-    "제59조",   # 소프트웨어 진흥법
-    "제22조",   # 지방계약법
+    "제90조",
+    "제75조",
+    "제27조",
+    "제50조",
+    "제59조",
+    "제22조",
 ]
 
 # ─────────────────────────────────────────
@@ -76,32 +76,29 @@ FILE_META = {
         "source": "법률",
         "is_ref_article_doc": False,
     },
+    "지방회계법": {
+        "document_type": "지방회계법",
+        "source": "법률",
+        "is_ref_article_doc": False,
+    },
 }
 
 # ─────────────────────────────────────────
-# 조문 번호 추출 패턴
+# 법령약자 매핑 (chunk_id 생성용)
 # ─────────────────────────────────────────
-# 용역계약 일반조건: 제N절, 제N항, 가/나/다...
-YONG_ARTICLE_PATTERN = re.compile(
-    r"(제\d+절)\s*(제\d+항)?\s*([가-힣](?=\.)|\d+(?=\.))?",
-    re.UNICODE
-)
-
-# 일반 법령: 제N조, 제N항, 제N호
-LAW_ARTICLE_PATTERN = re.compile(
-    r"제\s*\d+\s*조(\s*의\s*\d+)?",
-    re.UNICODE
-)
+DOC_TYPE_TO_PREFIX = {
+    "지방계약법":                    "LCA",
+    "지방계약법 시행령":              "LCAE",
+    "지방계약법 시행규칙":            "LCAR",
+    "소프트웨어 진흥법":              "SWPA",
+    "지방회계법":                    "LARA",
+    "지방자치단체 용역계약 일반조건":  "PYG",
+}
 
 # ─────────────────────────────────────────
 # 유틸 함수
 # ─────────────────────────────────────────
 def read_docx(path: Path) -> list[tuple[str, str]]:
-    """
-    doc/docx에서 (타입, 텍스트) 튜플 리스트 반환
-    타입: 'p' (단락) | 'tbl' (표 셀)
-    용역계약 일반조건처럼 절 헤더가 표 안에 있는 문서를 위해 구분
-    """
     suffix = path.suffix.lower()
 
     if suffix == ".docx":
@@ -125,7 +122,6 @@ def read_docx(path: Path) -> list[tuple[str, str]]:
         return lines
 
     elif suffix == ".doc":
-        # win32com으로 .doc 읽기 (Word 필요) — 표 구분 없이 단락만
         word = win32com.client.Dispatch("Word.Application")
         word.Visible = False
         try:
@@ -139,54 +135,67 @@ def read_docx(path: Path) -> list[tuple[str, str]]:
             return lines
         finally:
             word.Quit()
-
     else:
         raise ValueError(f"지원하지 않는 파일 형식: {suffix}")
 
 
 def find_meta(filename: str) -> dict | None:
-    """파일명에서 메타 정보 찾기"""
-    for key, meta in FILE_META.items():
+    # 긴 키부터 매칭 (지방계약법_시행령이 지방계약법보다 먼저 매칭되도록)
+    for key in sorted(FILE_META.keys(), key=len, reverse=True):
         if key in filename:
-            return meta
+            return FILE_META[key]
     return None
 
 
 def make_article_id(article_number: str) -> str:
-    """article_number → article_id (공백/특수문자 → 언더스코어)"""
     return re.sub(r"[\s/·]", "_", article_number).strip("_")
 
 
 # ─────────────────────────────────────────
-# 파서 1: 용역계약 일반조건 (절/항/호 구조)
+# chunk_id 생성 — {법령약자}_{조}_{항}_{호}
 # ─────────────────────────────────────────
-def parse_yongye(lines: list[tuple[str, str]]) -> list[dict]:
+def make_chunk_id(prefix: str, jo: int, hang: int | None = None, ho: int | None = None, jo_ui: int | None = None) -> str:
     """
-    용역계약 일반조건 파싱
-    - 절 헤더: 표(tbl) 셀 안에 "제N절 제목" 형태
-    - 항: 단락(p) "1.", "2." 숫자 목록
-    - 호: 단락(p) "가.", "나." 한글 목록
-    - 주의: 이 문서는 제7절 내부에 제8절 내용이 섹션 구분 없이 이어지므로
-            동일한 항 번호가 재등장하면 절 번호를 하나 올려서 처리
+    규칙: {prefix}_{조}[_{조의N}][_{항}][_{호}]
+    예:   LCAE_90_3  /  LCAR_70_1_6  /  LCA_18  /  SWPA_50
     """
+    parts = [str(jo)]
+    if jo_ui is not None:
+        parts.append(str(jo_ui))
+    if hang is not None:
+        parts.append(str(hang))
+    if ho is not None:
+        parts.append(str(ho))
+    return f"{prefix}_{'_'.join(parts)}"
+
+
+# ─────────────────────────────────────────
+# 파서 1: 용역계약 일반조건 (절/항/호 구조) — 기존과 동일
+# ─────────────────────────────────────────
+def parse_yongye(lines: list[tuple[str, str]], prefix: str = "PYG") -> list[dict]:
     articles = []
     cur_section = None
     cur_clause  = None
     cur_item    = None
     buf = []
-    seen_section_nums = []   # 절 번호 등장 순서 (중복 감지용)
+    seen_section_nums = []
 
     section_pat = re.compile(r"^제\s*(\d+)\s*절")
     clause_pat  = re.compile(r"^\s*(\d+)\s*\.")
     item_pat    = re.compile(r"^\s*([가나다라마바사아자차카타파하])\s*\.")
 
+    HANGUL_ORDER = "가나다라마바사아자차카타파하"
+
     def flush():
         if cur_section and cur_clause and cur_item and buf:
             an = f"제{cur_section}절 제{cur_clause}항 {cur_item}"
+            # chunk_id: PYG_{절}_{항} (호는 생략 — 예규 구조상 절+항이 최소 단위)
+            chunk_id = f"{prefix}_{cur_section}_{cur_clause}"
             articles.append({
-                "article_id": make_article_id(an),
+                "chunk_id":      chunk_id,
+                "article_id":    make_article_id(an),
                 "article_number": an,
-                "text": " ".join(buf),
+                "text":          " ".join(buf),
                 "hierarchy": {
                     "절": f"제{cur_section}절",
                     "항": f"제{cur_clause}항",
@@ -202,7 +211,6 @@ def parse_yongye(lines: list[tuple[str, str]]) -> list[dict]:
         if sm:
             flush(); buf = []
             raw_num = sm.group(1)
-            # 동일 절 번호 재등장 → 다음 절 번호로 올림 (7절 → 8절)
             count = seen_section_nums.count(raw_num)
             cur_section = str(int(raw_num) + count)
             seen_section_nums.append(raw_num)
@@ -220,7 +228,6 @@ def parse_yongye(lines: list[tuple[str, str]]) -> list[dict]:
 
     flush()
 
-    # 같은 절 안에서 항+호 조합이 중복될 경우 절 번호 +1 처리
     seen_ids: dict[str, bool] = {}
     for a in articles:
         an = a["article_number"]
@@ -228,7 +235,7 @@ def parse_yongye(lines: list[tuple[str, str]]) -> list[dict]:
             old_sec = int(re.search(r"제(\d+)절", an).group(1))
             new_an = an.replace(f"제{old_sec}절", f"제{old_sec + 1}절")
             a["article_number"] = new_an
-            a["article_id"] = make_article_id(new_an)
+            a["article_id"]     = make_article_id(new_an)
             a["hierarchy"]["절"] = f"제{old_sec + 1}절"
         else:
             seen_ids[an] = True
@@ -237,52 +244,139 @@ def parse_yongye(lines: list[tuple[str, str]]) -> list[dict]:
 
 
 # ─────────────────────────────────────────
-# 파서 2: 일반 법령 (제N조 구조)
+# 파서 2: 일반 법령 — 항/호 단위 분리 (수정)
 # ─────────────────────────────────────────
-def parse_law(lines: list[tuple[str, str]]) -> list[dict]:
+def parse_law(lines: list[tuple[str, str]], prefix: str) -> list[dict]:
     """
-    일반 법령 파싱
-    - 제N조(제목) 구조
+    일반 법령 파싱 — 제N조 단위로 묶은 뒤, 내부 ①②③ 항과 1.2.3. 호를 분리.
+
+    chunk_id 규칙: {prefix}_{조}[_{조의N}][_{항}][_{호}]
+      - 항만 있으면:  LCAE_90_1
+      - 항+호 있으면: LCAR_70_1_6
+      - 조만 있으면:  LCA_18
     """
-    articles = []
-    current_article = None
-    current_title = None
-    buffer = []
+    # ── Step 1: 제N조 단위로 텍스트 묶기 ──
+    article_pat = re.compile(r"^(제\s*\d+\s*조(?:의\s*\d+)?)\s*[(\[〔]?([^)\]\)〕\n]*)[)\]\)〕]?")
 
-    article_pat = re.compile(r"^(제\s*\d+\s*조(?:의\s*\d+)?)\s*[(\[〔]?([^)\]\)〕]*)[)\]\)〕]?")
+    raw_articles: list[dict] = []
+    cur_jo    = None
+    cur_jo_ui = None
+    cur_title = ""
+    buf: list[str] = []
 
-    def flush():
-        if current_article and buffer:
-            article_number = current_article
-            articles.append({
-                "article_id": make_article_id(article_number),
-                "article_number": article_number,
-                "title": current_title or "",
-                "text": " ".join(buffer),
-                "hierarchy": {
-                    "조": current_article,
-                }
+    def flush_jo():
+        if cur_jo is not None and buf:
+            raw_articles.append({
+                "jo":    cur_jo,
+                "jo_ui": cur_jo_ui,
+                "title": cur_title,
+                "text":  " ".join(buf),
             })
 
-    for typ, text in lines:
+    for _, text in lines:
         m = article_pat.match(text)
         if m:
-            flush()
-            buffer = [text]
-            current_article = re.sub(r"\s+", "", m.group(1))
-            current_title = m.group(2).strip() if m.group(2) else ""
+            flush_jo()
+            buf = [text]
+            raw_jo_str = re.sub(r"\s+", "", m.group(1))  # 제90조의3
+            jo_m = re.match(r"제(\d+)조(?:의(\d+))?", raw_jo_str)
+            cur_jo    = int(jo_m.group(1)) if jo_m else None
+            cur_jo_ui = int(jo_m.group(2)) if jo_m and jo_m.group(2) else None
+            cur_title = m.group(2).strip() if m.group(2) else ""
         else:
-            buffer.append(text)
+            buf.append(text)
 
-    flush()
+    flush_jo()
+
+    # ── Step 2: 조 내부 텍스트에서 항/호 분리 ──
+    # 항 패턴: ①②③... (원문자) 또는 공백 후 숫자+점
+    hang_pat = re.compile(r"[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮]")
+    HANG_MAP = {c: i+1 for i, c in enumerate("①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮")}
+
+    # 호 패턴: "1. ", "2. " 형태 (항 내부)
+    ho_pat = re.compile(r"\s(\d{1,2})\.\s")
+
+    articles: list[dict] = []
+
+    for raw in raw_articles:
+        jo    = raw["jo"]
+        jo_ui = raw["jo_ui"]
+        text  = raw["text"]
+
+        # 항 분리
+        # 원문자로 split
+        hang_splits = re.split(r"([①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮])", text)
+
+        if len(hang_splits) <= 1:
+            # 항 없음 → 조 단위 청크
+            chunk_id = make_chunk_id(prefix, jo, jo_ui=jo_ui)
+            articles.append({
+                "chunk_id":      chunk_id,
+                "article_id":    f"제{jo}조" + (f"의{jo_ui}" if jo_ui else ""),
+                "article_number": f"제{jo}조" + (f"의{jo_ui}" if jo_ui else ""),
+                "title":         raw["title"],
+                "text":          text,
+                "hierarchy":     {"조": f"제{jo}조" + (f"의{jo_ui}" if jo_ui else "")},
+            })
+            continue
+
+        # 항 있음 → 항 단위로 분리
+        # hang_splits: [조 서문, ①, 항1텍스트, ②, 항2텍스트, ...]
+        i = 1
+        while i < len(hang_splits) - 1:
+            hang_char = hang_splits[i]
+            hang_text = hang_splits[i + 1].strip() if i + 1 < len(hang_splits) else ""
+            hang_num  = HANG_MAP.get(hang_char, i)
+
+            # 호 분리 (항 텍스트 내부)
+            ho_splits = re.split(r"\s(\d{1,2})\.\s", hang_text)
+
+            if len(ho_splits) <= 1:
+                # 호 없음 → 항 단위 청크
+                chunk_id = make_chunk_id(prefix, jo, hang=hang_num, jo_ui=jo_ui)
+                articles.append({
+                    "chunk_id":      chunk_id,
+                    "article_id":    f"제{jo}조" + (f"의{jo_ui}" if jo_ui else "") + f"제{hang_num}항",
+                    "article_number": f"제{jo}조" + (f"의{jo_ui}" if jo_ui else "") + f"제{hang_num}항",
+                    "title":         raw["title"],
+                    "text":          hang_char + hang_text,
+                    "hierarchy":     {
+                        "조": f"제{jo}조" + (f"의{jo_ui}" if jo_ui else ""),
+                        "항": f"제{hang_num}항",
+                    },
+                })
+            else:
+                # 호 있음 → 호 단위 청크
+                # ho_splits: [항 서문, 호번호, 호텍스트, 호번호, 호텍스트, ...]
+                j = 1
+                while j < len(ho_splits) - 1:
+                    ho_num  = int(ho_splits[j])
+                    ho_text = ho_splits[j + 1].strip() if j + 1 < len(ho_splits) else ""
+                    chunk_id = make_chunk_id(prefix, jo, hang=hang_num, ho=ho_num, jo_ui=jo_ui)
+                    articles.append({
+                        "chunk_id":      chunk_id,
+                        "article_id":    f"제{jo}조" + (f"의{jo_ui}" if jo_ui else "") + f"제{hang_num}항제{ho_num}호",
+                        "article_number": f"제{jo}조" + (f"의{jo_ui}" if jo_ui else "") + f"제{hang_num}항제{ho_num}호",
+                        "title":         raw["title"],
+                        "text":          f"{hang_char} {ho_splits[0].strip()} {ho_num}. {ho_text}",
+                        "hierarchy":     {
+                            "조": f"제{jo}조" + (f"의{jo_ui}" if jo_ui else ""),
+                            "항": f"제{hang_num}항",
+                            "호": f"제{ho_num}호",
+                        },
+                    })
+                    j += 2
+
+            i += 2
+
     return articles
 
 
 # ─────────────────────────────────────────
-# 필터링: REF_ARTICLE / UPPER_LAW 해당 여부
+# 필터링
 # ─────────────────────────────────────────
 def tag_article(article: dict, is_ref_doc: bool) -> dict:
-    an = article["article_number"]
+    an = article.get("article_number", "")
     article["is_ref_article"] = is_ref_doc and any(ref in an for ref in REF_ARTICLE)
     article["is_upper_law"]   = any(ref in an for ref in UPPER_LAW)
     return article
@@ -300,23 +394,23 @@ def process_file(path: Path):
 
     print(f"[PARSE] {filename}")
     paragraphs = read_docx(path)
+    prefix     = DOC_TYPE_TO_PREFIX.get(meta["document_type"], "UNK")
 
     if meta["is_ref_article_doc"]:
-        articles = parse_yongye(paragraphs)
+        articles = parse_yongye(paragraphs, prefix=prefix)
     else:
-        articles = parse_law(paragraphs)
+        articles = parse_law(paragraphs, prefix=prefix)
 
-    # 태깅
     articles = [tag_article(a, meta["is_ref_article_doc"]) for a in articles]
 
     result = {
-        "document_type": meta["document_type"],
-        "source": meta["source"],
-        "filename": path.name,
-        "total_articles": len(articles),
-        "ref_article_count": sum(1 for a in articles if a["is_ref_article"]),
-        "upper_law_count": sum(1 for a in articles if a["is_upper_law"]),
-        "articles": articles,
+        "document_type":      meta["document_type"],
+        "source":             meta["source"],
+        "filename":           path.name,
+        "total_articles":     len(articles),
+        "ref_article_count":  sum(1 for a in articles if a.get("is_ref_article")),
+        "upper_law_count":    sum(1 for a in articles if a.get("is_upper_law")),
+        "articles":           articles,
     }
 
     out_path = OUTPUT_DIR / f"{filename}.json"
@@ -325,6 +419,10 @@ def process_file(path: Path):
 
     print(f"  → 저장: {out_path}")
     print(f"  → 전체 조문: {len(articles)}개 | REF: {result['ref_article_count']}개 | UPPER: {result['upper_law_count']}개")
+
+    # law_refs chunk_id 매칭 확인
+    chunk_ids = {a["chunk_id"] for a in articles}
+    print(f"  → 생성된 chunk_id 샘플: {list(chunk_ids)[:5]}")
 
 
 def main():
