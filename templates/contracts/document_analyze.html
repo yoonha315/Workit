@@ -34,13 +34,13 @@
   <div class="review-panel">
     <div class="review-panel-header" style="padding:12px 20px; display:flex; align-items:center; min-height:56px; border-bottom:1px solid #f0f0f0;">
       <div class="review-actions" style="display:flex; align-items:center; gap:8px; width:100%;">
-        <div id="reviewCountBadge" style="display:none; align-items:center; gap:6px; background:#fffbeb; border:1.5px solid #d97706; color:#d97706; border-radius:8px; padding:0 14px; height:36px; font-size:13px; font-weight:600; white-space:nowrap; flex-shrink:0;">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>
-          <span id="reviewCountText">확인 0 건</span>
+        <div id="reviewCountBadge" style="display:none; align-items:center; gap:6px; background:#f0fdfa; border:1.5px solid #0d9488; color:#0d9488; border-radius:8px; padding:0 10px; padding-bottom: 2px; height:36px; font-size:13px; font-weight:600; white-space:nowrap; flex-shrink:0;">
+          <!-- <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg> -->
+          <span id="reviewCountText">분석 결과 0 건</span>
         </div>
         <button class="btn btn-primary btn-sm" id="btnCompleteReview" onclick="completeReview()"
-          style="display:none; height:36px; align-items:center; gap:6px; white-space:nowrap; flex-shrink:0; font-size:13px; font-weight:600; padding:0 14px; border-radius:8px;">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="9 18 15 12 9 6"/></svg>
+          style="display:none; height:36px; align-items:center; gap:6px; white-space:nowrap; flex-shrink:0; font-size:13px; font-weight:600; padding:0 14px; padding-bottom: 2px; border-radius:8px;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" width="13" height="13"><polyline points="9 18 15 12 9 6"/></svg>
           검토완료 · 이행관리 이관
         </button>
       </div>
@@ -48,6 +48,9 @@
 
     <div class="review-panel-body" id="reviewBody">
       {% if result %}
+      <div class="review-hint-bar" style="padding:10px 20px; display:flex; align-items:center; gap:6px; background:#f5f3ff; border-bottom:1px solid #ede9fe; font-size:12.5px; color:#6d28d9;">
+        🔎 각 항목 클릭 시 해당 위치로 이동합니다.
+      </div>
         <!-- Show existing result -->
         <div id="reviewResults"></div>
       {% else %}
@@ -56,7 +59,7 @@
           <div class="ai-intro-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="40" height="40"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
           </div>
-          <h3>AI 검토 결과</h3>
+          <h3>AI 분석 결과</h3>
           <p>sLLM이 문서를 분석해 <strong>확인이 필요한 항목</strong>만 표시합니다.<br>법률 항목은 근거만 제시하며 수정안은 제공하지 않습니다.</p>
           <button class="btn btn-primary" id="btnAnalyze" onclick="runAnalysis()">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
@@ -83,30 +86,25 @@
 {% endblock %}
 
 {% block extra_js %}
+<style>
+  .review-card {
+    transition: box-shadow 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
+  }
+  .review-card--clickable:hover {
+    box-shadow: 0 6px 16px rgba(0,0,0,0.10);
+    transform: translateY(-2px);
+    border-color: #c7d2fe !important;
+  }
+</style>
 <script>
 const DOC_ID = {{ doc.id }};
 
 {% if result %}
-window.onload = () => renderResults({{ result.blanks|safe }}, {{ result.typos|safe }}, {{ result.legal_issues|safe }});
+window.onload = () => {
+  const data = JSON.parse('{{ result_json|escapejs }}');
+  renderResults(data.blanks, data.typos, data.legal_issues);
+};
 {% endif %}
-
-// function runAnalysis() {
-//   const btn = document.getElementById('btnAnalyze');
-//   btn.disabled = true;
-//   btn.innerHTML = '<span class="spinner"></span> 분석 중...';
-
-//   fetch(`/contracts/document/${DOC_ID}/ai-analyze/`, {
-//     method: 'POST',
-//     headers: {'X-CSRFToken': getCsrf()},
-//   })
-//   .then(r => r.json())
-//   .then(data => {
-//     if (data.status === 'ok') {
-//       document.getElementById('aiIntro').style.display = 'none';
-//       renderResults(data.blanks, data.typos, data.legal_issues);
-//     }
-//   });
-// }
 
 function runAnalysis() {
   const btn = document.getElementById('btnAnalyze');
@@ -150,12 +148,29 @@ function pollTaskStatus(taskId) {
   }, 3000); // 3초마다 상태 확인
 }
 
+/**
+ * 조항 번호를 화면 표시용으로 띄어쓰기 처리한다.
+ * "제2조제1항" → "제 2조 제 1항"
+ * "제6조의2제1항" → "제 6조의2 제 1항"  ("의N"은 조 번호에 붙어 함께 묶임)
+ * "제5조제1항제1호" → "제 5조 제 1항 제 1호"
+ */
+function formatClauseLocation(raw) {
+  if (!raw) return '';
+
+  // 조(+의N) / 항 / 호 단위로 쪼갠다. 각 조각은 "조|항|호"로 끝난다.
+  const parts = raw.match(/제\d+조(?:의\d+)?|제\d+항|제\d+호/g);
+  if (!parts) return raw; // 패턴에 안 맞으면 원본 그대로(예: "단락1" 등 fallback 케이스)
+
+  return parts
+    .map(p => p.replace(/^제(\d+)/, '제 $1'))
+    .join(' ');
+}
+
 function renderResults(blanks, typos, legal) {
-  console.log('legal:', JSON.stringify(legal, null, 2));
   const total = blanks.length + typos.length + legal.length;
   const badge = document.getElementById('reviewCountBadge');
   badge.style.display = 'flex';
-  document.getElementById('reviewCountText').textContent = `확인 ${total} 건`;
+  document.getElementById('reviewCountText').textContent = `☑️ 분석 결과 ${total} 건`;
   document.getElementById('btnCompleteReview').style.display = 'flex';
   document.getElementById('btnDownloadReport').style.display = 'flex';
 
@@ -211,21 +226,28 @@ function renderResults(blanks, typos, legal) {
       const color = 판정색[판정] || '#6b7280';
       const bg    = 판정bg[판정]  || '#f9fafb';
 
-      html += `<div class="review-card review-card--legal" style="margin-bottom:10px;">
+      const hasFragments = l.fragments && l.fragments.length > 0;
+      const hasBbox = l.bbox && l.page;
+      const clickable = hasFragments || hasBbox;
+      html += `<div class="review-card review-card--legal${clickable ? ' review-card--clickable' : ''}" style="margin-bottom:10px; border:1.5px solid transparent; ${clickable ? 'cursor:pointer;' : ''}"
+        ${hasFragments ? `data-fragments='${JSON.stringify(l.fragments)}' onclick="jumpToClause(this)"` : (hasBbox ? `data-page="${l.page}" data-bbox='${JSON.stringify(l.bbox)}' onclick="jumpToClause(this)"` : '')}>
         <div class="review-card-header">
           <span class="review-tag tag--legal">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><circle cx="12" cy="12" r="10"/></svg>
-            법률 검토
+            법률
           </span>
-          <span class="review-location">${l.location || ''}</span>
+          <span class="review-location">${formatClauseLocation(l.location) || ''}</span>
         </div>
-        <p class="review-desc" style="font-weight:600; margin-bottom:8px;">${l.issue || ''}</p>
-        <div style="display:flex; gap:8px; margin-bottom:8px; flex-wrap:wrap;">
-          ${판정 ? `<span style="background:${bg}; color:${color}; border:1px solid ${color}; border-radius:6px; padding:2px 10px; font-size:12px; font-weight:700;">판정: ${판정}</span>` : ''}
-          ${유형 ? `<span style="background:#f1f5f9; color:#475569; border-radius:6px; padding:2px 10px; font-size:12px;">유형: ${유형}</span>` : ''}
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px; margin-bottom:8px;">
+          <p class="review-desc" style="font-weight:600; margin:0; padding-top:5px;">${l.issue || ''}</p>
+          ${판정 ? `<span style="background:${bg}; color:${color}; border:1px solid ${color}; border-radius:6px; padding:2px 10px; font-size:12px; font-weight:700; white-space:nowrap; flex-shrink:0;">판정: ${판정}</span>` : ''}
         </div>
+        ${유형 ? `<div style="margin-bottom:8px;"><span style="background:#f1f5f9; color:#475569; border-radius:6px; padding:2px 10px; font-size:12px;">유형: ${유형}</span></div>` : ''}
         ${근거 ? `<p style="font-size:13px; color:#374151; line-height:1.6; margin-bottom:6px;">${근거}</p>` : ''}
         ${l.original_text ? `<div class="review-quote">"${l.original_text.substring(0, 100)}${l.original_text.length > 100 ? '...' : ''}"</div>` : ''}
+        ${!clickable ? `<div style="display:flex; align-items:flex-start; gap:6px; margin-top:8px; padding:8px 10px; background:#f9fafb; border-radius:6px; font-size:11.5px; color:#9ca3af; line-height:1.5;">
+          <span>⚠️ 이 문서는 PDF 구조 특성상 해당 조항의 위치를 정확히 표시할 수 없습니다.</span>
+        </div>` : ''}
       </div>`;
     });
   }
@@ -250,7 +272,12 @@ function completeReview() {
   });
 }
 
-// PDF 페이지 이미지 로드
+// PDF 페이지 이미지 로드 + 좌표 오버레이
+const PAGE_DPI = 150; // document_page_image 뷰에서 사용하는 DPI (contracts/views.py 참고)
+const PDF_BASE_DPI = 72; // PDF 좌표(fitz/pdfplumber)는 72dpi 포인트 기준
+const PAGE_SCALE = PAGE_DPI / PDF_BASE_DPI; // 렌더링 이미지 픽셀 ↔ PDF 좌표 변환 비율
+const HIGHLIGHT_PADDING_PT = 6; // 박스 여유 공간 (PDF 포인트 단위, 72dpi 기준 — 화면에선 약 10~13px로 보임)
+
 (function() {
   const container = document.getElementById('pdfPages');
   if (!container) return;
@@ -264,12 +291,14 @@ function completeReview() {
       const total = data.pages || 1;
       for (let p = 1; p <= total; p++) {
         const wrap = document.createElement('div');
+        wrap.className = 'pdf-page-wrap';
+        wrap.dataset.pageNumber = p;
         wrap.style.cssText = 'background:#fff; border-radius:8px; box-shadow:0 1px 3px rgba(0,0,0,.08); overflow:hidden; position:relative;';
-        
+
         const pageNum = document.createElement('div');
         pageNum.textContent = `- ${p} -`;
         pageNum.style.cssText = 'text-align:center; font-size:12px; color:#aaa; padding:8px 0;';
-        
+
         const img = document.createElement('img');
         img.src = `/contracts/document/${DOC_ID}/page/${p}/`;
         img.style.cssText = 'width:100%; display:block;';
@@ -279,7 +308,158 @@ function completeReview() {
         wrap.appendChild(img);
         container.appendChild(wrap);
       }
+
+      // 모든 페이지 이미지를 다 추가한 다음, 보류 중인 박스 렌더링 처리
+      pendingHighlights.forEach(h => drawHighlightBox(h.page, h.bbox, h.elId, {
+        scrollTo: h.isFirst !== false,
+        flashIt: true,
+      }));
+      pendingHighlights = [];
     });
-  })();
+})();
+
+let pendingHighlights = [];
+
+/**
+ * 특정 페이지의 wrap div를 찾고, 그 안의 img가 로드 완료된 후
+ * bbox(PDF 좌표) 기준으로 빨간 박스를 그린다.
+ * 이미지가 아직 안 로드됐으면 onload 이후로 미룬다.
+ */
+function drawHighlightBox(pageNumber, bbox, elId, options = {}) {
+  const { scrollTo = true, flashIt = true } = options;
+
+  const wrap = document.querySelector(`.pdf-page-wrap[data-page-number="${pageNumber}"]`);
+  if (!wrap) return null;
+
+  const img = wrap.querySelector('img');
+  if (!img) return null;
+
+  let createdBox = null;
+
+  const render = (retriesLeft = 5) => {
+    const naturalW = img.naturalWidth;
+    const naturalH = img.naturalHeight;
+    if (!naturalW || !naturalH) {
+      if (retriesLeft > 0) setTimeout(() => render(retriesLeft - 1), 100);
+      return;
+    }
+
+    const displayScaleX = img.clientWidth / naturalW;
+    const displayScaleY = img.clientHeight / naturalH;
+
+    // bbox(텍스트 영역) 사방에 패딩을 더해 박스가 글자를 여유 있게 감싸도록 한다.
+    // 단, bbox.width는 clause_locator.py에서 "페이지 끝 - 20pt"로 이미 넉넉하게 잡혀있어
+    // (실제 텍스트보다 오른쪽에 여유 공간이 더 있음) 왼쪽과 동일하게 패딩을 더하면
+    // 오른쪽 여백이 과도해진다. 그래서 너비는 늘리지 않고 좌측 이동분만 보정한다.
+    // (왼쪽으로 PADDING만큼 이동 + 오른쪽 끝은 RIGHT_TRIM만큼 당겨서 좌우 여백을 비슷하게 맞춘다)
+    const RIGHT_TRIM_PT = 60; // bbox.width에 내재된 과도한 우측 여유 공간 보정값
+
+    const paddedX = bbox.x - HIGHLIGHT_PADDING_PT;
+    const paddedY = bbox.y - HIGHLIGHT_PADDING_PT;
+    const paddedW = bbox.width + HIGHLIGHT_PADDING_PT - RIGHT_TRIM_PT;
+    const paddedH = bbox.height + HIGHLIGHT_PADDING_PT * 1.1;
+
+    const left = paddedX * PAGE_SCALE * displayScaleX;
+    const top = paddedY * PAGE_SCALE * displayScaleY;
+    const width = paddedW * PAGE_SCALE * displayScaleX;
+    const height = paddedH * PAGE_SCALE * displayScaleY;
+
+    const old = wrap.querySelector(`[data-highlight-id="${elId}"]`);
+    if (old) old.remove();
+
+    const box = document.createElement('div');
+    box.dataset.highlightId = elId;
+    box.style.cssText = `
+      position:absolute;
+      left:${left}px; top:${top + img.offsetTop}px;
+      width:${width}px; height:${height}px;
+      border:2px solid #dc2626;
+      background:rgba(220,38,38,0.06);
+      border-radius:3px;
+      pointer-events:none;
+      transition: background 0.3s, border-color 0.3s;
+    `;
+    wrap.appendChild(box);
+    createdBox = box;
+
+    if (scrollTo) {
+      // 박스가 막 생성된 경우, 박스 자체를 기준으로 스크롤 (페이지 전체가 아니라 박스 위치 기준)
+      box.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+
+    if (flashIt) {
+      // 두 번 깜빡이기
+      const flash = (count) => {
+        if (count <= 0) return;
+        box.style.background = 'rgba(220,38,38,0.25)';
+        setTimeout(() => {
+          box.style.background = 'rgba(220,38,38,0.06)';
+          setTimeout(() => flash(count - 1), 200);
+        }, 500);
+      };
+
+      setTimeout(() => flash(3), 300);
+    }
+  };
+
+  // img.complete가 true인데 naturalWidth가 아직 0인 브라우저 엣지 케이스가 있어
+  // (이 경우 load 이벤트가 다시 발생하지 않아 render()가 영원히 안 불릴 수 있음),
+  // complete 여부만으로 즉시 렌더링을 시도하고, 혹시 못 미쳤을 경우를 위해
+  // load 리스너와 짧은 폴백 타이머를 같이 건다.
+  if (img.complete) {
+    render();
+  } else {
+    img.addEventListener('load', render, { once: true });
+    setTimeout(() => { if (img.complete) render(); }, 150);
+  }
+
+  return createdBox;
+}
+
+/**
+ * 법률 검토 카드 클릭 시 호출.
+ * 해당 조항이 위치한 페이지로 스크롤하고, 박스를 잠깐 강조한다.
+ */
+function jumpToClause(cardEl) {
+  const fragmentsRaw = cardEl.dataset.fragments;
+
+  if (fragmentsRaw) {
+    // 새 구조: 항/호 단위 위치. 페이지 경계를 넘으면 여러 조각(fragments)으로 구성됨.
+    // 모든 조각에 박스를 그리되, 스크롤·깜빡임 강조는 첫 번째 조각 기준으로만 한 번 실행한다.
+    const fragments = JSON.parse(fragmentsRaw);
+    if (!fragments.length) return;
+
+    fragments.forEach((fragment, idx) => {
+      const elId = `clause-${fragment.page}-${Math.round(fragment.x)}-${Math.round(fragment.y)}`;
+      const wrap = document.querySelector(`.pdf-page-wrap[data-page-number="${fragment.page}"]`);
+
+      if (!wrap) {
+        pendingHighlights.push({ page: fragment.page, bbox: fragment, elId, isFirst: idx === 0 });
+        return;
+      }
+
+      drawHighlightBox(fragment.page, fragment, elId, {
+        scrollTo: idx === 0,
+        flashIt: true,
+      });
+    });
+    return;
+  }
+
+  // 기존 구조: 조(條) 단위 단일 bbox
+  const page = parseInt(cardEl.dataset.page, 10);
+  const bbox = JSON.parse(cardEl.dataset.bbox);
+  if (!page || !bbox) return;
+
+  const elId = `clause-${page}-${Math.round(bbox.x)}-${Math.round(bbox.y)}`;
+
+  const wrap = document.querySelector(`.pdf-page-wrap[data-page-number="${page}"]`);
+  if (!wrap) {
+    pendingHighlights.push({ page, bbox, elId, isFirst: true });
+    return;
+  }
+
+  drawHighlightBox(page, bbox, elId);
+}
 </script>
 {% endblock %}

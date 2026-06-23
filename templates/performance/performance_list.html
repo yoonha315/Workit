@@ -9,7 +9,7 @@
   </div>
   <div class="header-search">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-    <input type="text" class="search-input" placeholder="프로젝트 · 업체 · 문서 검색" id="searchInput" oninput="filterPerformances(this.value)">
+    <input type="text" class="search-input" placeholder="프로젝트 · 업체 검색" id="searchInput" oninput="filterPerformances(this.value)">
   </div>
 </div>
 
@@ -298,18 +298,6 @@ let currentPerfId = null;
     renderLegend();
     applyAccentColors();
   }
-
-  // function renderLegend() {
-  //   const seen = {};
-  //   CALENDAR_EVENTS.forEach(ev => {
-  //     if (!seen[ev.project_name]) seen[ev.project_name] = ev.color;
-  //   });
-  //   const leg = document.getElementById('calendarLegend');
-  //   const items = Object.entries(seen).map(([name, color]) =>
-  //     `<span class="legend-item"><span class="legend-line" style="background:${color}"></span>${name}</span>`
-  //   ).join('');
-  //   leg.innerHTML = items + `<span class="legend-item"><span class="legend-line" style="background:#aaa"></span>완료(준공)</span>`;
-  // }
 
   function renderLegend() {
       const leg = document.getElementById('calendarLegend');

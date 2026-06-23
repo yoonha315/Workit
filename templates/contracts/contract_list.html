@@ -16,9 +16,13 @@
 <div class="card">
   <div class="card-header">
     <h2 class="card-title">계약 검토 목록 (최근순)</h2>
+    <div class="header-search">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="text" class="search-input" placeholder="프로젝트 · 업체 검색" id="searchInput" oninput="filterContracts(this.value)">
+    </div>
   </div>
   {% if contracts %}
-    <ul class="item-list item-list--full">
+    <ul class="item-list item-list--full" id="contractList">
       {% for c in contracts %}
       <li class="item-row item-row--clickable" data-id="{{ c.id }}" onclick="openContractDetail({{ c.id }})">
         <div class="item-main">
@@ -38,6 +42,7 @@
       </li>
       {% endfor %}
     </ul>
+    <p class="empty-state" id="noSearchResult" style="display:none;">검색 결과가 없습니다.</p>
   {% else %}
     <div class="empty-state">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="48" height="48"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
@@ -167,7 +172,7 @@
       <button class="btn btn-ghost" onclick="closeModal('modalContractDetail')">닫기</button>
       <button class="btn btn-primary" id="btnAIStart" onclick="startAIReview()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-        AI 검토 시작
+        AI 분석 시작
       </button>
     </div>
     <!-- <div class="modal-footer" id="detailFooterEdit" style="display:none;">
@@ -510,6 +515,22 @@ function goToView(docId) {
 function goToAnalyze(docId) {
   window.location.href = `/contracts/document/${docId}/analyze/`;
 }
+
+// ── Filter ──
+window.filterContracts = function(q) {
+  const query = q.toLowerCase();
+  let visibleCount = 0;
+
+  document.querySelectorAll('#contractList .item-row').forEach(el => {
+    const text = el.textContent.toLowerCase();
+    const match = text.includes(query);
+    el.style.display = match ? '' : 'none';
+    if (match) visibleCount++;
+  });
+
+  const noResult = document.getElementById('noSearchResult');
+  if (noResult) noResult.style.display = visibleCount === 0 ? 'block' : 'none';
+};
 
 function startAIReview() {
   const btnAI = document.getElementById('btnAIStart');

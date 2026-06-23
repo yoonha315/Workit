@@ -47,10 +47,10 @@ input, textarea { font-family: inherit; font-size: inherit; }
   overflow: hidden;
 }
 .sidebar.collapsed { width: var(--sidebar-collapsed); }
-.sidebar-header { padding: 20px 16px 16px; border-bottom: 1px solid rgba(255,255,255,.08); }
+.sidebar-header { padding: 16px 16px 16px; border-bottom: 1px solid rgba(255,255,255,.08); }
 .logo-wrap { display: flex; align-items: center; gap: 10px; }
-.logo-icon { width: 36px; height: 36px; background: var(--primary); border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-.logo-text { color: #fff; font-weight: 700; font-size: 17px; white-space: nowrap; overflow: hidden; }
+.logo-icon { width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-left: 20px; }
+.logo-text { color: #fff; font-weight: 700; font-size: 20px; white-space: nowrap; overflow: hidden; padding-top: 5px;}
 .sidebar.collapsed .logo-text { display: none; }
 
 .sidebar-nav { flex: 1; padding: 12px 10px; display: flex; flex-direction: column; gap: 2px; }
@@ -107,7 +107,7 @@ input, textarea { font-family: inherit; font-size: inherit; }
 .stat-icon--green { background: #D1FAE5; color: #059669; }
 
 /* ── Dashboard Grid ── */
-.dashboard-grid { display: grid; grid-template-columns: 380px 1fr; gap: 16px; }
+.dashboard-grid { display: grid; grid-template-columns: 380px 1fr; gap: 16px; align-items: start; }
 .dashboard-lists { display: flex; flex-direction: column; gap: 16px; }
 
 /* ── Mini Calendar ── */
@@ -280,7 +280,7 @@ input, textarea { font-family: inherit; font-size: inherit; }
 .legal-ref { font-size: 11px; color: var(--primary); font-weight: 500; margin-bottom: 4px; }
 
 /* ── Performance Layout ── */
-.performance-layout { display: grid; grid-template-columns: 1fr 380px; gap: 16px; }
+.performance-layout { display: grid; grid-template-columns: 1fr 380px; gap: 16px; align-items: start }
 .perf-calendar-card { }
 .perf-list-card { }
 .cal-tooltip { position: fixed; background: #1E1B4B; color: #fff; border-radius: 8px; padding: 8px 12px; font-size: 12px; pointer-events: none; display: none; z-index: 9999; line-height: 1.5; box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
