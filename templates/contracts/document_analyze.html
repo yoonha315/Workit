@@ -352,7 +352,7 @@ function drawHighlightBox(pageNumber, bbox, elId, options = {}) {
     // (실제 텍스트보다 오른쪽에 여유 공간이 더 있음) 왼쪽과 동일하게 패딩을 더하면
     // 오른쪽 여백이 과도해진다. 그래서 너비는 늘리지 않고 좌측 이동분만 보정한다.
     // (왼쪽으로 PADDING만큼 이동 + 오른쪽 끝은 RIGHT_TRIM만큼 당겨서 좌우 여백을 비슷하게 맞춘다)
-    const RIGHT_TRIM_PT = 60; // bbox.width에 내재된 과도한 우측 여유 공간 보정값
+    const RIGHT_TRIM_PT = 20; // bbox.width에 내재된 과도한 우측 여유 공간 보정값
 
     const paddedX = bbox.x - HIGHLIGHT_PADDING_PT;
     const paddedY = bbox.y - HIGHLIGHT_PADDING_PT;
