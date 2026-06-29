@@ -232,7 +232,7 @@ input, textarea { font-family: inherit; font-size: inherit; }
 .alert-error { background: #FEE2E2; color: #991B1B; }
 
 /* ── Document Analyze Layout ── */
-.analyze-layout { display: grid; grid-template-columns: 1fr 380px; gap: 0; height: calc(100vh - 64px); margin: -32px; overflow: hidden; }
+.analyze-layout { display: grid; grid-template-columns: 1fr 380px; gap: 0; height: calc(100vh); margin: -32px; overflow: hidden; }
 .doc-viewer { display: flex; flex-direction: column; border-right: 1px solid var(--border); overflow: hidden; }
 .doc-viewer-header { display: flex; align-items: center; gap: 14px; padding: 14px 20px; border-bottom: 1px solid var(--border); background: #fff; }
 .back-link { display: flex; align-items: center; gap: 4px; color: var(--text-secondary); font-size: 13px; font-weight: 500; padding: 6px 10px; border-radius: 6px; transition: background var(--transition); }
@@ -430,4 +430,44 @@ input, textarea { font-family: inherit; font-size: inherit; }
   .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
   .mypage-top { grid-template-columns: 1fr; }
   .form-row { grid-template-columns: 1fr; }
+}
+
+/* ── 동시 세션 로그인 확인 ── */
+.session-confirm-text {
+  font-size: 14px;
+  color: var(--text-primary);
+  line-height: 1.6;
+  margin-bottom: 20px;
+}
+
+.session-confirm-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.session-confirm-actions form {
+  margin: 0;
+}
+
+.session-confirm-actions form:first-child {
+  flex: 0 0 auto;
+}
+
+.session-confirm-actions form:last-child {
+  flex: 1 1 auto;
+}
+
+.session-confirm-cancel {
+  width: 100%;
+  justify-content: center;
+  padding: 12px 18px;
+  font-size: 14px;
+}
+
+.session-confirm-continue {
+  width: 100%;
+  justify-content: center;
+  padding: 12px;
+  font-size: 15px;
 }

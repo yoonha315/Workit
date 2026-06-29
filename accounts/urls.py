@@ -8,4 +8,5 @@ urlpatterns = [
     path('password/change/', views.change_password_view, name='change_password'),
     path('mypage/', views.mypage_view, name='mypage'),
     path('mypage/update/', views.mypage_update, name='mypage_update'),
+    path('help/', views.help_page, name='help'),
 ]

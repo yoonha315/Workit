@@ -18,31 +18,37 @@ def _delete_session(session_key):
         Session.objects.filter(session_key=session_key).delete()
 
 
-def _handle_single_session_policy(request, user, suppress_block_message=False):
-    """동일계정 동시접속 정책 처리.
-
-    기본 정책은 기존 세션 종료(KILL_OLD)이다.
-    settings.ACCOUNTS_SINGLE_SESSION_POLICY = "BLOCK_NEW" 로 바꾸면 신규 접속 차단 방식으로 전환된다.
-    """
-
+def _check_single_session_conflict(request, user):
+    """동일 계정이 다른(살아있는) 세션에서 로그인 중인지 확인."""
     existing_session_key = user.current_session_key
     if not existing_session_key or existing_session_key == request.session.session_key:
-        return True
-
-    existing_session_exists = Session.objects.filter(session_key=existing_session_key).exists()
-    if not existing_session_exists:
-        user.current_session_key = None
-        user.save(update_fields=["current_session_key"])
-        return True
-
-    policy = getattr(settings, "ACCOUNTS_SINGLE_SESSION_POLICY", "KILL_OLD")
-    if policy == "BLOCK_NEW":
-        if not suppress_block_message:
-            messages.error(request, "이미 동일 계정으로 접속 중입니다. 기존 세션을 종료한 뒤 다시 로그인하세요.")
         return False
 
-    _delete_session(existing_session_key)
+    if not Session.objects.filter(session_key=existing_session_key).exists():
+        # 이미 끊긴 세션이면 정리하고 충돌 아님으로 처리
+        user.current_session_key = None
+        user.save(update_fields=["current_session_key"])
+        return False
+
     return True
+
+
+def _finalize_login(request, user):
+    """기존 세션 종료(필요 시) 후 실제 로그인 처리."""
+    existing_session_key = user.current_session_key
+    if existing_session_key and existing_session_key != request.session.session_key:
+        _delete_session(existing_session_key)
+
+    login(request, user)
+    if not request.session.session_key:
+        request.session.save()
+    user.register_login_success(request.session.session_key)
+
+    if user.must_change_password:
+        messages.info(request, '최초 로그인 또는 관리자 초기화 계정입니다. 비밀번호를 먼저 변경하세요.')
+        return redirect('change_password')
+
+    return redirect('home')
 
 
 def login_view(request):
@@ -52,6 +58,22 @@ def login_view(request):
         return redirect('home')
 
     if request.method == 'POST':
+        # ── 확인창에서 "계속" / "취소"를 누른 2차 제출 처리 ──
+        if request.POST.get('confirm_force_login') == '1':
+            pending_user_id = request.session.pop('pending_force_login_user_id', None)
+            user = User.objects.filter(pk=pending_user_id).first() if pending_user_id else None
+            if not user:
+                messages.error(request, '로그인 확인 시간이 초과되었습니다. 다시 로그인해 주세요.')
+                return redirect('login')
+            return _finalize_login(request, user)
+
+        if request.POST.get('cancel_force_login') == '1':
+            request.session.pop('pending_force_login_user_id', None)
+            return redirect('login')
+
+        # ── 일반적인 1차 로그인 제출 ──
+        request.session.pop('pending_force_login_user_id', None)  # 이전에 남아있던 대기 상태 정리
+
         username = (request.POST.get('username') or '').strip()
         password = request.POST.get('password') or ''
         candidate = User.objects.filter(username=username).first()
@@ -85,22 +107,26 @@ def login_view(request):
             return render(request, 'accounts/login.html', {'username': username})
 
         suppress_single_session_message = request.COOKIES.get('workit_password_changed_recently') == '1'
-        if not _handle_single_session_policy(request, user, suppress_block_message=suppress_single_session_message):
+        policy = getattr(settings, 'ACCOUNTS_SINGLE_SESSION_POLICY', 'KILL_OLD')
+        conflict = _check_single_session_conflict(request, user)
+
+        if conflict and policy == 'BLOCK_NEW':
+            if not suppress_single_session_message:
+                messages.error(request, '이미 동일 계정으로 접속 중입니다. 기존 세션을 종료한 뒤 다시 로그인하세요.')
             response = render(request, 'accounts/login.html', {'username': username})
             if suppress_single_session_message:
                 response.delete_cookie('workit_password_changed_recently')
             return response
 
-        login(request, user)
-        if not request.session.session_key:
+        if conflict:  # policy == KILL_OLD → 확인창 띄우기
+            request.session['pending_force_login_user_id'] = user.pk
             request.session.save()
-        user.register_login_success(request.session.session_key)
+            return render(request, 'accounts/login.html', {
+                'username': username,
+                'need_session_confirm': True,
+            })
 
-        if user.must_change_password:
-            messages.info(request, '최초 로그인 또는 관리자 초기화 계정입니다. 비밀번호를 먼저 변경하세요.')
-            return redirect('change_password')
-
-        return redirect('home')
+        return _finalize_login(request, user)
 
     return render(request, 'accounts/login.html')
 
@@ -197,3 +223,7 @@ def mypage_update(request):
         return JsonResponse({'status': 'ok', 'message': '정보가 수정되었습니다.'})
 
     return JsonResponse({'status': 'error', 'message': '잘못된 요청입니다.'}, status=400)
+
+@login_required
+def help_page(request):
+    return render(request, 'help/help.html')
