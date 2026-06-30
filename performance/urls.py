@@ -20,4 +20,5 @@ urlpatterns = [
     path('notifications/', views.notification_list, name='notification_list'),
     path('notifications/<int:pk>/read/', views.notification_read, name='notification_read'),
     path('notifications/read-all/', views.notification_read_all, name='notification_read_all'),
+    path('notifications/page/', views.notification_page, name='notification_page'),
 ]

@@ -64,9 +64,11 @@
           <span id="notifBadge" style="display:none;margin-left:auto;background:#e74c3c;color:#fff;border-radius:50%;min-width:16px;height:16px;font-size:10px;line-height:16px;text-align:center;flex-shrink:0;">0</span>
         </button>
         <div id="notifDropdown" style="display:none;position:fixed;left:220px;bottom:140px;width:300px;background:#fff;border:1px solid #e0e0e0;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.12);z-index:9999;">
-          <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid #f0f0f0;">
+          <div style="display:flex;justify-content:space-between;align-items:center;
+              padding:12px 16px;border-bottom:1px solid #f0f0f0;">
             <span style="font-weight:600;font-size:14px;color:#1a1a2e">알림</span>
-            <button onclick="readAllNotif()" style="background:none;border:none;cursor:pointer;font-size:12px;color:#4F63D2;">전체 읽음</button>
+            <a href="/performance/notifications/page/" style="
+                font-size:12px;color:#4F63D2;text-decoration:none;">전체보기</a>
           </div>
           <ul id="notifList" style="list-style:none;margin:0;padding:0;max-height:320px;overflow-y:auto;">
             <li style="padding:20px;text-align:center;color:#aaa;font-size:13px">새 알림이 없습니다.</li>
@@ -185,10 +187,12 @@ function fetchNotifications() {
                 list.innerHTML = data.notifications.map(n => `
                     <li onclick="readNotif(${n.id},'${n.url}')" style="
                         padding:12px 16px;cursor:pointer;
-                        border-bottom:1px solid #f5f5f5;font-size:13px;"
-                        onmouseover="this.style.background='#f8f8fb'"
-                        onmouseout="this.style.background='#fff'">
-                        <div style="color:#1a1a2e">${n.message}</div>
+                        border-bottom:1px solid #f5f5f5;font-size:13px;
+                        background:${n.is_read ? '#fafafa' : '#fff'};
+                        opacity:${n.is_read ? '0.6' : '1'};"
+                        onmouseover="this.style.background='#f0f0f5'"
+                        onmouseout="this.style.background='${n.is_read ? '#fafafa' : '#fff'}'">
+                        <div style="color:${n.is_read ? '#999' : '#1a1a2e'}">${n.message}</div>
                         <div style="color:#aaa;font-size:11px;margin-top:2px">${n.created_at}</div>
                     </li>
                 `).join('');

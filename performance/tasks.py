@@ -2,7 +2,7 @@ from celery import shared_task
 from django.utils import timezone
 from datetime import timedelta
 
-TARGET_TYPES = ['tech_apply', 'result_report']
+TARGET_TYPES = ['tech_apply', 'final']
 
 @shared_task
 def check_deadlines():
@@ -50,8 +50,8 @@ def check_deadlines():
                             f"Workit에 접속하여 산출물을 등록해 주세요.\n"
                             f"http://your-domain.com/performance/"
                         ),
-                        from_email=None,
-                        recipient_list=[user.email],
+                        from_email=None,           # ← DEFAULT_FROM_EMAIL 사용
+                        recipient_list=[user.email],  # ← 각 사용자 이메일로
                         fail_silently=True,
                     )
                 except Exception as e:
