@@ -19,7 +19,15 @@ class Performance(models.Model):
         return self.deliverables.filter(status='submitted').count()
 
     def total_count(self):
-        return 4  # 착수/테스트계획/테스트결과/완료
+        return 3  # 사업수행계획서, 기술적용결과표, 사업추진결과보고서
+
+    def next_deliverable_label(self):
+        existing = {d.deliverable_type: d for d in self.deliverables.all()}
+        for t, label in Deliverable.TYPE_CHOICES:
+            d = existing.get(t)
+            if not d or d.status == 'pending':
+                return label
+        return ''
 
 
 class Deliverable(models.Model):
@@ -32,7 +40,7 @@ class Deliverable(models.Model):
         ('pending', '미등록'),
         ('submitted', '제출완료'),
     ]
-    TYPE_ORDER = ['kickoff', 'test_plan', 'test_result', 'final', 'tech_apply']
+    TYPE_ORDER = ['kickoff', 'tech_apply', 'final']
 
     performance = models.ForeignKey(Performance, on_delete=models.CASCADE, related_name='deliverables')
     deliverable_type = models.CharField('산출물 유형', max_length=20, choices=TYPE_CHOICES)

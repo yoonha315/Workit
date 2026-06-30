@@ -7,6 +7,7 @@ from django.views.decorators.http import require_POST
 from contracts.models import Contract
 from .models import Performance, Deliverable
 from .models import Deliverable, Notification, Performance
+from django.utils import timezone
 
 PROJECT_COLORS = [
     '#4F63D2', '#00B894', '#6C5CE7', '#E67E22',
@@ -65,8 +66,8 @@ def performance_list(request):
 
     calendar_events = []
 
-    for idx, perf in enumerate(performances):
-        color    = PROJECT_COLORS[idx % len(PROJECT_COLORS)]
+    for perf in performances:
+        color    = PROJECT_COLORS[perf.contract_id % len(PROJECT_COLORS)]
         contract = perf.contract
         is_done  = contract.status == 'completed'
 
@@ -115,10 +116,10 @@ def performance_list(request):
         'performances': performances,
         'calendar_events_json': json.dumps(calendar_events, ensure_ascii=False),
         'project_colors': {
-            perf.id: PROJECT_COLORS[idx % len(PROJECT_COLORS)]
-            for idx, perf in enumerate(performances)
+            perf.id: PROJECT_COLORS[perf.contract_id % len(PROJECT_COLORS)]
+            for perf in performances
         },
-    })
+})
 
 
 @login_required
@@ -687,18 +688,30 @@ def _mock_kickoff_analysis():
 
 @login_required
 def notification_list(request):
-    notifs = Notification.objects.filter(user=request.user, is_read=False)
+    """드롭다운용 - 최신 5개 (읽음 여부 무관) + 안읽은 개수"""
+    recent = Notification.objects.filter(user=request.user).order_by('-created_at')[:5]
+    unread_count = Notification.objects.filter(user=request.user, is_read=False).count()
     return JsonResponse({
-        'unread_count': notifs.count(),
+        'unread_count': unread_count,
         'notifications': [
             {
-                'id': n.id,
-                'message': n.message,
-                'url': n.url,
-                'created_at': n.created_at.strftime('%Y-%m-%d %H:%M'),
+                'id':         n.id,
+                'message':    n.message,
+                'url':        n.url,
+                'created_at': timezone.localtime(n.created_at).strftime('%Y-%m-%d %H:%M'),  # localtime 적용
+                'is_read':    n.is_read,
             }
-            for n in notifs
+            for n in recent
         ],
+    })
+
+
+@login_required
+def notification_page(request):
+    """전체보기 페이지 - 전체 이력"""
+    notifications = Notification.objects.filter(user=request.user).order_by('-created_at')
+    return render(request, 'performance/notification_page.html', {
+        'notifications': notifications,
     })
 
 
