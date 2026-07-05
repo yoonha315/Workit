@@ -1,0 +1,59 @@
+{
+  "passed": false,
+  "review_status": "FAIL",
+  "can_auto_proceed": false,
+  "document_type": "pep",
+  "content_similarity": 0.7596,
+  "expected_section_count": 23,
+  "matched_section_count": 22,
+  "issues": [
+    {
+      "issue_type": "missing_section",
+      "code": "PEP-08",
+      "title": "일정계획",
+      "message": "기대 소제목 '일정계획'(PEP-08)이 파싱 결과에서 확인되지 않습니다.",
+      "sample": "",
+      "severity": "blocking"
+    },
+    {
+      "issue_type": "empty_section",
+      "code": "PEP-13",
+      "title": "위험관리계획",
+      "message": "'위험관리계획'(PEP-13) 소제목은 있지만 내용이 비어 있거나 지나치게 짧습니다.",
+      "sample": "",
+      "severity": "blocking"
+    },
+    {
+      "issue_type": "unrecognized_section",
+      "code": "",
+      "title": "pep_99",
+      "message": "파싱 결과의 'pep_99' 항목은 기준 소제목 목록에 없습니다. 신규 항목이거나 소제목 분리가 잘못됐을 수 있습니다.",
+      "sample": "",
+      "severity": "info"
+    },
+    {
+      "issue_type": "section_order_mismatch",
+      "code": "",
+      "title": "",
+      "message": "소제목 순서가 원본과 다릅니다.",
+      "sample": "원본 순서=['PEP-01', 'PEP-02', 'PEP-03-01', 'PEP-03-02', 'PEP-04-01', 'PEP-04-02', 'PEP-04-03', 'PEP-05-01', 'PEP-05-02', 'PEP-06', 'PEP-07', 'PEP-09', 'PEP-10', 'PEP-11-01', 'PEP-11-02', 'PEP-11-03', 'PEP-11-04', 'PEP-12', 'PEP-13', 'PEP-14', 'PEP-15', 'PEP-16'], 파싱 순서=['PEP-01', 'PEP-02', 'PEP-03-01', 'PEP-03-02', 'PEP-04-01', 'PEP-04-02', 'PEP-04-03', 'PEP-05-01', 'PEP-05-02', 'PEP-06', 'PEP-07', 'PEP-09', 'PEP-10', 'PEP-11-02', 'PEP-11-01', 'PEP-11-03', 'PEP-11-04', 'PEP-12', 'PEP-13', 'PEP-14', 'PEP-15', 'PEP-16']",
+      "severity": "info"
+    },
+    {
+      "issue_type": "content_misplaced",
+      "code": "PEP-14",
+      "title": "보안대책",
+      "message": "'보안대책'(PEP-14) 원본 내용이 '교육계획'(PEP-15) 섹션에 잘못 들어간 것으로 보입니다. (자기 섹션 유사도 0.11 vs 'PEP-15' 유사도 0.97)",
+      "sample": "개인정보보호법에따라접근통제암호화접속기록관리를적용한다15",
+      "severity": "blocking"
+    },
+    {
+      "issue_type": "content_misplaced",
+      "code": "PEP-15",
+      "title": "교육계획",
+      "message": "'교육계획'(PEP-15) 원본 내용이 '보안대책'(PEP-14) 섹션에 잘못 들어간 것으로 보입니다. (자기 섹션 유사도 0.11 vs 'PEP-14' 유사도 0.96)",
+      "sample": "시스템오픈전담당자대상사용자교육을2회실시한다16",
+      "severity": "blocking"
+    }
+  ]
+}

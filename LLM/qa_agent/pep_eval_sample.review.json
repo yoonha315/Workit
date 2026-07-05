@@ -1,0 +1,10 @@
+{
+  "passed": true,
+  "review_status": "PASS",
+  "can_auto_proceed": true,
+  "document_type": "pep",
+  "content_similarity": 0.8699,
+  "expected_section_count": 23,
+  "matched_section_count": 23,
+  "issues": []
+}
