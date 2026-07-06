@@ -26,7 +26,7 @@ SECTIONS = [
     SectionSpec("PEP-11-03", "공공기관 DB표준화 지침", "표준화 계획", []),
     SectionSpec("PEP-11-04", "전자정부 웹사이트 품질관리 지침", "표준화 계획", []),
 
-    SectionSpec("PEP-12", "품질관리계획", None, []),
+    SectionSpec("PEP-12", "품질관리계획", None, ["품질보증계획", "품질 보증 계획"]),
     SectionSpec("PEP-13", "위험관리계획", None, []),
     SectionSpec("PEP-14", "보안대책", None, []),
     SectionSpec("PEP-15", "교육계획", None, []),

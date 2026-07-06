@@ -18,7 +18,7 @@ from typing import Any
 _PEP_SECTION_KEYWORDS: list[tuple[str, str, list[str]]] = [
     ('PEP-01',    '사업명',                   ['사업명']),
     ('PEP-02',    '사업기간',                  ['사업기간', '사업 기간']),
-    ('PEP-03-01', '추진배경',                  ['추진배경', '추진 배경', '사업 목적']),
+    ('PEP-03-01', '추진배경',                  ['추진배경', '추진 배경']),
     ('PEP-03-02', '목적',                      ['사업 목적', '추진목적', '목적']),
     ('PEP-04-01', '개발대상업무',               ['개발대상업무', '개발 대상 업무', '개발대상']),
     ('PEP-04-02', '개발 및 운영환경',           ['개발 및 운영환경', '개발환경', '운영환경']),
@@ -34,7 +34,7 @@ _PEP_SECTION_KEYWORDS: list[tuple[str, str, list[str]]] = [
     ('PEP-11-02', '정보화기반표준',              ['정보화기반표준', '정보화기반 표준']),
     ('PEP-11-03', '공공기관 DB표준화 지침',      ['DB표준화', 'DB 표준화', '데이터베이스 표준']),
     ('PEP-11-04', '전자정부 웹사이트 품질관리 지침', ['웹사이트 품질', '웹 품질', '전자정부 표준']),
-    ('PEP-12',    '품질관리계획',               ['품질관리계획', '품질 관리 계획', '품질관리 계획']),
+    ('PEP-12',    '품질관리계획',               ['품질관리계획', '품질 관리 계획', '품질관리 계획', '품질보증계획', '품질 보증 계획']),
     ('PEP-13',    '위험관리계획',               ['위험관리계획', '위험 관리', '리스크 관리']),
     ('PEP-14',    '보안대책',                   ['보안대책', '보안 대책', '보안계획']),
     ('PEP-15',    '교육계획',                   ['교육계획', '교육 계획', '사용자 교육']),
@@ -42,13 +42,86 @@ _PEP_SECTION_KEYWORDS: list[tuple[str, str, list[str]]] = [
 ]
 
 
-def _find_keyword_position(text: str, keywords: list[str]) -> int | None:
-    best = None
-    for kw in keywords:
-        idx = text.find(kw)
-        if idx != -1 and (best is None or idx < best):
-            best = idx
-    return best
+def _normalize_for_match(s: str) -> str:
+    """공백 제거. PDF 추출 시 '사 업 명'처럼 글자 사이에 공백이 섞여 들어가는
+    경우가 흔해서, 공백을 무시하고 키워드를 매칭해야 실제 헤더를 놓치지 않는다."""
+    return re.sub(r'\s+', '', s)
+
+
+def _build_normalized_index(text: str) -> tuple[str, list[int]]:
+    """
+    공백을 제거한 정규화 텍스트와, 그 정규화 텍스트의 각 글자가 원본 text의
+    몇 번째 글자였는지 알려주는 index_map을 만든다. 정규화 텍스트에서 찾은
+    위치를 원본 text의 위치로 되돌려야 줄바꿈이 살아있는 원본 그대로 슬라이싱할 수 있다.
+    """
+    chars: list[str] = []
+    index_map: list[int] = []
+    for i, ch in enumerate(text):
+        if ch.isspace():
+            continue
+        chars.append(ch)
+        index_map.append(i)
+    return ''.join(chars), index_map
+
+
+# 목차 탐지 기준값 (둘 다 만족해야 "목차가 있다"고 판단)
+_TOC_WINDOW_RATIO = 0.15       # 문서 앞부분 이 비율 이내에 몰려 있어야 목차 후보
+_TOC_MIN_CLUSTER_RATIO = 0.5   # 매칭된 소제목의 이 비율 이상이 그 구간에 몰려 있어야 함
+
+
+def _sequential_search(
+    norm_text: str, start_from: int
+) -> dict[str, tuple[int, str]]:
+    """cursor 이후 각 코드의 키워드 중 가장 이른 매치를 순서대로 찾아나간다."""
+    positions: dict[str, tuple[int, str]] = {}
+    cursor = start_from
+
+    for code, label, keywords in _PEP_SECTION_KEYWORDS:
+        found_idx = -1
+        found_kw = ""
+
+        for kw in keywords:
+            kw_norm = _normalize_for_match(kw)
+            if not kw_norm:
+                continue
+            idx = norm_text.find(kw_norm, cursor)
+            if idx >= 0 and (found_idx == -1 or idx < found_idx):
+                found_idx = idx
+                found_kw = kw_norm
+
+        if found_idx >= 0:
+            positions[code] = (found_idx, found_kw)
+            cursor = found_idx + len(found_kw)
+
+    return positions
+
+
+def _find_section_positions(text: str) -> tuple[dict[str, tuple[int, str]], list[int]]:
+    """
+    원본에서 각 소제목이 실제로 등장하는 위치를 찾는다.
+
+    문서 앞부분에 목차가 있으면(과업수행계획서는 대부분 그렇다) 목차에도 소제목
+    문구가 본문과 똑같은 순서로 나열돼 있어서, '직전 위치 다음의 첫 매치'만으로는
+    검색 커서가 목차 블록 안에서만 맴돌고 실제 본문까지 못 넘어간다. 1차로 처음부터
+    순차 탐색을 해본 뒤, 매칭된 위치의 상당수가 문서 앞부분 좁은 구간에 몰려 있으면
+    (= 목차로 추정) 그 구간 바로 다음부터 다시 순차 탐색해서 실제 본문 위치를 잡는다.
+    (LLM/qa_agent/engine.py의 _find_section_positions와 같은 전략.)
+    """
+    norm_text, index_map = _build_normalized_index(text)
+
+    positions = _sequential_search(norm_text, start_from=0)
+
+    doc_len = len(norm_text)
+    toc_window = doc_len * _TOC_WINDOW_RATIO
+    clustered = [pos for pos, _ in positions.values() if pos <= toc_window]
+
+    if positions and len(clustered) >= len(positions) * _TOC_MIN_CLUSTER_RATIO:
+        toc_end = max(clustered)
+        retried = _sequential_search(norm_text, start_from=toc_end)
+        if retried:
+            positions = retried
+
+    return positions, index_map
 
 
 def parse_execution_plan(text: str) -> dict:
@@ -65,13 +138,15 @@ def parse_execution_plan(text: str) -> dict:
             ...
         }
     """
-    # 각 코드의 시작 위치 탐색
+    positions, index_map = _find_section_positions(text)
+
+    # 정규화 텍스트 위치 -> 원본 text 위치로 변환, 위치 순으로 정렬
+    label_by_code = {code: label for code, label, _ in _PEP_SECTION_KEYWORDS}
     anchor_positions: list[tuple[str, str, int]] = []
 
-    for code, label, keywords in _PEP_SECTION_KEYWORDS:
-        pos = _find_keyword_position(text, keywords)
-        if pos is not None:
-            anchor_positions.append((code, label, pos))
+    for code, (norm_pos, _kw) in positions.items():
+        raw_pos = index_map[norm_pos] if norm_pos < len(index_map) else len(text)
+        anchor_positions.append((code, label_by_code[code], raw_pos))
 
     anchor_positions.sort(key=lambda x: x[2])
 
@@ -97,6 +172,27 @@ def parse_execution_plan(text: str) -> dict:
             sections[code] = {'label': label, 'content': '', 'found': False}
 
     return sections
+
+
+def to_qa_agent_records(parsed: dict) -> list[dict]:
+    """
+    parse_execution_plan()의 출력(code -> {label, content, found})을
+    LLM/qa_agent.engine.review_section_mapping()이 받는 레코드 리스트
+    ([{"section_id": "pep_03_01", "section_title": ..., "content": ...}, ...])로 변환한다.
+
+    found=False(본문에서 못 찾은) 섹션은 넣지 않는다 — 넣으면 content가 빈 문자열이라
+    qa_agent가 missing_section 대신 empty_section으로 판정해버린다.
+    """
+    records = []
+    for code, info in parsed.items():
+        if not info.get('found'):
+            continue
+        records.append({
+            'section_id': code.lower().replace('-', '_'),
+            'section_title': info.get('label', ''),
+            'content': info.get('content', ''),
+        })
+    return records
 
 
 # ─────────────────────────────────────────────────────────────────────────────

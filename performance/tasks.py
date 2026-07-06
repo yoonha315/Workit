@@ -74,9 +74,17 @@ def parse_execution_plan_task(self, deliverable_id: int):
     performance.parsers.parse_execution_plan() 를 사용하므로 LLM 없이 동작한다.
     호출 시점: 과업수행계획서 파일 업로드 직후.
     """
+    import os
+    import sys
+
     from performance.models import Deliverable, ExecutionPlanParsedData
     from contracts.utils import extract_text
-    from performance.parsers import parse_execution_plan
+    from performance.parsers import parse_execution_plan, to_qa_agent_records
+
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    llm_dir = os.path.join(BASE_DIR, 'LLM')
+    if llm_dir not in sys.path:
+        sys.path.insert(0, llm_dir)
 
     deliverable = Deliverable.objects.select_related('performance__contract').get(pk=deliverable_id)
 
@@ -98,16 +106,33 @@ def parse_execution_plan_task(self, deliverable_id: int):
         found_count = sum(1 for s in result_json.values() if s.get('found'))
         total_count = len(result_json)
 
+        # 소제목 매핑 QA 검수 (LLM/qa_agent). 검수 자체가 실패해도 파싱 성공은
+        # 그대로 살려야 하므로 별도 try/except로 감싸고, 실패 시 리포트만 비워둔다.
+        qa_report = {}
+        try:
+            from qa_agent.engine import review_section_mapping
+
+            qa_report = review_section_mapping(
+                original_text=text,
+                parsed_sections=to_qa_agent_records(result_json),
+                document_type='pep',
+            )
+        except Exception:
+            import traceback
+            print(f'[parse_execution_plan_task] QA 검수 실패 — deliverable_id={deliverable_id}\n{traceback.format_exc()}')
+
         parsed.parsed_json = result_json
+        parsed.qa_report = qa_report
         parsed.parse_status = 'done'
         parsed.parsed_at = timezone.now()
-        parsed.save(update_fields=['parsed_json', 'parse_status', 'parsed_at'])
+        parsed.save(update_fields=['parsed_json', 'qa_report', 'parse_status', 'parsed_at'])
 
         print(
             f'[parse_execution_plan_task] 완료 — deliverable_id={deliverable_id}, '
-            f'섹션 {found_count}/{total_count} 발견'
+            f'섹션 {found_count}/{total_count} 발견, QA={qa_report.get("review_status", "N/A")}'
         )
-        return {'status': 'ok', 'deliverable_id': deliverable_id, 'found': found_count, 'total': total_count}
+        return {'status': 'ok', 'deliverable_id': deliverable_id, 'found': found_count, 'total': total_count,
+                'qa_status': qa_report.get('review_status')}
 
     except Exception as exc:
         import traceback

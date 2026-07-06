@@ -155,7 +155,6 @@ def document_ai_status(request, task_id):
     else:
         return JsonResponse({'state': 'error', 'message': str(result.info)})
 
-
 @login_required
 @require_POST
 def document_complete_review(request, doc_id):
@@ -170,7 +169,7 @@ def document_complete_review(request, doc_id):
     contract = doc.contract
     contract.status = 'in_progress'
 
-    # ── 이관 전 검증 ──
+    # ── 이관 전 검증 ──────────────────────────────────────────────────────────
     # 1. 필수 문서 3종 확인
     REQUIRED_DOCS = [
         ('requirements', '요구사항정의서'),
@@ -200,7 +199,7 @@ def document_complete_review(request, doc_id):
                 'message': f'{label} 정보가 없어 이관이 불가합니다.',
             }, status=400)
 
-    # ── 검증 통과 → 이관 처리 ──
+    # ── 검증 통과 → 이관 처리 ─────────────────────────────────────────────────
     doc.review_status = 'reviewed'
     doc.save()
 
@@ -210,7 +209,7 @@ def document_complete_review(request, doc_id):
         from contracts.utils import extract_text
         text = extract_text(doc.file.path)
 
-        # ── 1. 계약기간 추출 ─────────────────────────────────────────
+        # ── 1. 계약기간 추출 ───────────────────────────────────────────────────
         period_pattern = (
             r"(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일\s*부터\s*"
             r"(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일\s*까지"
@@ -224,10 +223,9 @@ def document_complete_review(request, doc_id):
 
         contract.save()
 
-        # ── 2. 산출물 일정 추출 (정규식) ─────────────────────────────
+        # ── 2. 산출물 일정 추출 ────────────────────────────────────────────────
         performance, _ = Performance.objects.get_or_create(contract=contract)
 
-        # 날짜 패턴
         date_patterns = [
             r"(\d{4})[.\-](\d{1,2})[.\-](\d{1,2})",
             r"(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일",
@@ -276,8 +274,6 @@ def document_complete_review(request, doc_id):
                 if due_date:
                     break
 
-            # 추출 성공이든 실패든 저장
-            # 실패 시 due_date=None → 이행관리 화면에서 수동 입력
             Deliverable.objects.update_or_create(
                 performance=performance,
                 deliverable_type=item['type'],
@@ -285,6 +281,21 @@ def document_complete_review(request, doc_id):
             )
             if not due_date:
                 print(f"[산출물 일정] {item['label']}: 추출 실패 → 수동 입력 필요")
+
+        # ── 3. RFP 파싱 비동기 태스크 시작 ← 여기만 새로 추가 ─────────────────
+        #
+        # RFP 파일은 이관 시점에 확정됐다고 볼 수 있으므로,
+        # 이 시점에 파싱을 시작하는 것이 적절하다.
+        # 파싱은 Celery 워커에서 비동기로 돌아가므로 응답 속도에 영향 없음.
+        try:
+            rfp_doc = contract.documents.filter(doc_type='rfp').first()
+            if rfp_doc:
+                from contracts.tasks import parse_rfp_task
+                parse_rfp_task.delay(rfp_doc.id)
+                print(f'[이관] RFP 파싱 태스크 시작 — rfp_doc_id={rfp_doc.id}')
+        except Exception as task_exc:
+            # 파싱 태스크 시작 실패가 이관 자체를 막아선 안 됨 — 로그만 남김
+            print(f'[이관] RFP 파싱 태스크 시작 실패 (이관은 계속): {task_exc}')
 
     except Exception as e:
         print(f"[document_complete_review] 처리 실패: {e}")
@@ -342,6 +353,8 @@ def contract_update_file(request, pk):
         existing.original_filename = f.name
         existing.review_status = 'pending'
         existing.save()
+        # 파일이 바뀌면 기존 AI 분석 결과는 유효하지 않으므로 폐기
+        AIReviewResult.objects.filter(document=existing).delete()
     else:
         ContractDocument.objects.create(
             contract=contract,

@@ -4,6 +4,7 @@ from celery import shared_task
 
 MAX_CLAUSES = 3  # 시연용 조항 수 제한 (CPU 환경)
 
+
 @shared_task(bind=True)
 def analyze_document_task(self, doc_id):
     """AI 분석 비동기 태스크"""
@@ -18,17 +19,10 @@ def analyze_document_task(self, doc_id):
     doc = ContractDocument.objects.get(pk=doc_id)
 
     try:
-        # Step 1. 텍스트 추출
         file_text = extract_text(doc.file.path)
         if not file_text.strip():
             return {'status': 'error', 'message': '텍스트 추출 실패'}
 
-        # Step 1.5. 조항/항별 좌표(fragments) 추출 (PDF/HWP 모두 지원, 실패 시 빈 매핑으로 fallback)
-        # clause_locator.extract_clause_positions() 반환 형식:
-        #   { "제2조": {"fragments": [{page,x,y,width,height}, ...]},
-        #     "제2조제1항": {"fragments": [...]}, ... }
-        # 항이 있는 조항은 "제N조제M항" 키로, 항이 없으면 "제N조" 키로 직접 매칭한다.
-        # (페이지 경계를 넘는 영역은 fragments가 여러 개로 분할되어 있다 — 프론트에서 각각 그린다)
         clause_positions = {}
         file_path_lower = doc.file.path.lower()
 
@@ -37,7 +31,6 @@ def analyze_document_task(self, doc_id):
 
             if file_path_lower.endswith('.pdf'):
                 clause_positions = extract_clause_positions(doc.file.path)
-
             elif file_path_lower.endswith('.hwp'):
                 from hwp_converter import convert_hwp_to_pdf
                 import tempfile
@@ -47,16 +40,15 @@ def analyze_document_task(self, doc_id):
         except Exception:
             clause_positions = {}
 
-        # Step 2. RAG (BGE-M3 Dense+Sparse 하이브리드 검색)
         from qdrant_client import QdrantClient
-        from yoonha_contract_rag import (
-            load_model,
+        from yoonha_law_rag import (
+            load_embed_model,
             load_laws_ref,
-            review_contract,
+            review_contract_jo as review_contract,
             results_to_json,
         )
 
-        embed_model = load_model()  # BAAI/bge-m3 (BGEM3FlagModel)
+        embed_model = load_embed_model()
         qdrant_client = QdrantClient(url="http://localhost:6333")
         laws_ref = load_laws_ref()
 
@@ -68,25 +60,18 @@ def analyze_document_task(self, doc_id):
         )
         rag_results = results_to_json(clause_results)
 
-        # 메모리 해제 (BGE-M3 다 썼으니 EXAONE 로딩 전에 비움 — Segfault 방지)
         del embed_model
         del qdrant_client
         import gc
         gc.collect()
 
-        # 조항(항/호)번호 기준으로 좌표 정보(fragments) 병합.
-        # "제5조제1항제1호"가 clause_positions에 직접 있으면 그걸 쓰고,
-        # 없으면 "제5조제1항"(항 단위)로 fallback, 그것도 없으면 "제5조"(조 단위)로 fallback.
         import re as _re
 
         def _fallback_keys(num: str) -> list[str]:
-            """clause_number로부터 [원본, 항단위, 조단위] 순으로 fallback 키 목록 생성."""
             keys = [num]
-            # 호 제거: "제5조제1항제1호" → "제5조제1항"
             m_hang = _re.match(r"(제\d+조(?:의\d+)?제\d+항)", num or "")
             if m_hang and m_hang.group(1) != num:
                 keys.append(m_hang.group(1))
-            # 조까지만: "제5조"
             m_jo = _re.match(r"(제\d+조(?:의\d+)?)", num or "")
             if m_jo and m_jo.group(1) not in keys:
                 keys.append(m_jo.group(1))
@@ -102,8 +87,6 @@ def analyze_document_task(self, doc_id):
 
             if pos and pos.get('fragments'):
                 item['fragments'] = pos['fragments']
-                # 하위 호환: 기존 프론트/리포트 코드가 단일 page/bbox를 참조하는 곳이
-                # 있을 수 있으므로 첫 fragment를 대표값으로 같이 내려준다.
                 first = pos['fragments'][0]
                 item['page'] = first['page']
                 item['bbox'] = {
@@ -115,12 +98,10 @@ def analyze_document_task(self, doc_id):
                 item['page'] = None
                 item['bbox'] = None
 
-        # Step 3. sLLM 추론 (CPU 환경 대비 상위 MAX_CLAUSES개만)
         from jihye_inference import load_model as load_llm_model, predict
 
         llm_model, tokenizer = load_llm_model()
 
-        # law_refs 있는 항목만 필터링 후 MAX_CLAUSES개 제한
         filtered = [r for r in rag_results if r.get('law_refs')][:MAX_CLAUSES]
         total = len(filtered)
         done = 0
@@ -148,7 +129,6 @@ def analyze_document_task(self, doc_id):
                 meta={'current': done, 'total': total}
             )
 
-        # Step 4. 결과 저장
         parsed = parse_to_workit(inference_results)
         AIReviewResult.objects.update_or_create(
             document=doc,
@@ -170,3 +150,59 @@ def analyze_document_task(self, doc_id):
     except Exception as e:
         import traceback
         return {'status': 'error', 'message': traceback.format_exc()}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RFP 파싱 태스크 (규칙 기반, LLM 없음)
+#
+# 실행 시점 : document_complete_review (이행관리 이관) 직후 비동기
+# 파서      : contracts.parsers.parse_rfp (키워드·정규식 기반)
+# 결과      : contracts.models.RFPParsedData.parsed_json (RDS)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@shared_task(bind=True, max_retries=2, default_retry_delay=10)
+def parse_rfp_task(self, rfp_doc_id: int):
+    """
+    RFP 문서를 규칙 기반으로 파싱해 RFPParsedData에 저장한다.
+
+    contracts.parsers.parse_rfp() 를 사용하므로 LLM 호출이 없고,
+    텍스트 추출 후 즉시 완료된다(보통 1~2초).
+    """
+    from django.utils import timezone
+    from contracts.models import ContractDocument, RFPParsedData
+    from contracts.utils import extract_text
+    from contracts.parsers import parse_rfp  # ← 규칙 기반 파서
+
+    rfp_doc = ContractDocument.objects.select_related('contract').get(pk=rfp_doc_id)
+
+    parsed, _ = RFPParsedData.objects.get_or_create(document=rfp_doc)
+    parsed.parse_status = 'processing'
+    parsed.error_message = ''
+    parsed.save(update_fields=['parse_status', 'error_message'])
+
+    try:
+        text = extract_text(rfp_doc.file.path)
+        if not text.strip():
+            raise ValueError('RFP 텍스트 추출 실패 — 파일을 확인하세요.')
+
+        result_json = parse_rfp(text)
+
+        found_count = sum(1 for s in result_json.get('sections', {}).values() if s.get('found'))
+        total_count = len(result_json.get('sections', {}))
+
+        parsed.parsed_json = result_json
+        parsed.parse_status = 'done'
+        parsed.parsed_at = timezone.now()
+        parsed.save(update_fields=['parsed_json', 'parse_status', 'parsed_at'])
+
+        print(f'[parse_rfp_task] 완료 — doc_id={rfp_doc_id}, 섹션 {found_count}/{total_count} 발견')
+        return {'status': 'ok', 'doc_id': rfp_doc_id, 'found': found_count, 'total': total_count}
+
+    except Exception as exc:
+        import traceback
+        err = traceback.format_exc()
+        parsed.parse_status = 'failed'
+        parsed.error_message = err[:2000]
+        parsed.save(update_fields=['parse_status', 'error_message'])
+        print(f'[parse_rfp_task] 실패 — doc_id={rfp_doc_id}\n{err}')
+        raise self.retry(exc=exc)

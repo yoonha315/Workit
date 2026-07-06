@@ -308,24 +308,17 @@ class SectionMappingReviewAgent:
         rest = "-".join(parts[1:])
         return f"{prefix}-{rest}"
 
-    def _find_section_positions(
-        self, original_clean: str, codes: Any
-    ) -> Tuple[Dict[str, Tuple[int, str]], str, List[int]]:
-        """
-        원본에서 각 소제목이 실제로 등장하는 위치를 config 순서대로 순차 탐색한다.
-        '직전에 찾은 위치 다음부터' 검색해서, 목차에 남아있는 잔여 텍스트나
-        흔한 단어 반복으로 인해 엉뚱한 위치를 잘못 잡는 걸 최대한 방지한다.
+    # 목차 탐지 기준값 (둘 다 만족해야 "목차가 있다"고 판단)
+    _TOC_WINDOW_RATIO = 0.15   # 문서 앞부분 이 비율 이내에 몰려 있어야 목차 후보
+    _TOC_MIN_CLUSTER_RATIO = 0.5  # 매칭된 소제목의 이 비율 이상이 그 구간에 몰려 있어야 함
 
-        정규화된 텍스트(original_norm)와, 그 정규화 텍스트의 각 글자가 원본
-        original_clean의 몇 번째 글자였는지 알려주는 index_map도 같이 반환한다.
-        이 매핑이 있어야, 문단 단위 검사에서 줄바꿈이 살아있는 원본 그대로
-        섹션 구간을 잘라낼 수 있다.
-        """
-        original_norm, index_map = normalize_with_map(original_clean)
-        ordered_specs = [s for s in self.sections if s.code in codes]
-
+    def _sequential_search(
+        self, original_norm: str, ordered_specs: List[SectionSpec], start_from: int
+    ) -> Dict[str, Tuple[int, str]]:
+        """cursor 이후 '첫 매치'를 순서대로 찾아나간다 (짧고 흔한 단어가 본문 뒤쪽
+        엉뚱한 곳에서 매치되는 걸 막기 위해, 무조건 마지막 매치를 쓰지는 않는다)."""
         positions: Dict[str, Tuple[int, str]] = {}
-        search_from = 0
+        cursor = start_from
 
         for spec in ordered_specs:
             found_idx = -1
@@ -335,7 +328,7 @@ class SectionMappingReviewAgent:
                 candidate_norm = normalize_compare_text(candidate)
                 if not candidate_norm:
                     continue
-                idx = original_norm.find(candidate_norm, search_from)
+                idx = original_norm.find(candidate_norm, cursor)
                 if idx >= 0:
                     found_idx = idx
                     found_text = candidate
@@ -343,7 +336,49 @@ class SectionMappingReviewAgent:
 
             if found_idx >= 0:
                 positions[spec.code] = (found_idx, found_text)
-                search_from = found_idx + len(normalize_compare_text(found_text))
+                cursor = found_idx + len(normalize_compare_text(found_text))
+
+        return positions
+
+    def _find_section_positions(
+        self, original_clean: str, codes: Any
+    ) -> Tuple[Dict[str, Tuple[int, str]], str, List[int]]:
+        """
+        원본에서 각 소제목이 실제로 등장하는 위치를 찾는다.
+
+        기본은 '직전에 찾은 위치 다음의 첫 매치'로 순서대로 찾아나가는 방식이다.
+        다만 문서 앞부분에 목차가 있으면(대부분의 정형 문서가 그렇다) 목차에도
+        소제목 문구가 본문과 똑같은 순서로 나열돼 있어서, 이 방식만으로는 검색
+        커서가 목차 블록 안에서만 맴돌고 실제 본문(항상 목차보다 뒤에 있음)까지
+        못 넘어가는 문제가 있다 — contracts/parsers.py의 parse_rfp()가 이미 겪었던
+        문제와 동일하다.
+
+        그래서 1차로 처음부터 순차 탐색을 해본 뒤, 매칭된 위치의 상당수가 문서
+        앞부분 좁은 구간에 몰려 있으면(= 목차로 추정) 그 구간 바로 다음부터
+        다시 순차 탐색해서 실제 본문 위치를 잡는다. 단순히 '마지막 위치 사용'으로
+        바꾸지 않는 이유는, 성능·보안처럼 짧고 흔한 단어는 본문 뒤쪽 다른 섹션의
+        설명 안에서도 다시 등장할 수 있어 마지막 매치가 오히려 엉뚱한 곳을 가리킬
+        수 있기 때문이다.
+
+        정규화된 텍스트(original_norm)와, 그 정규화 텍스트의 각 글자가 원본
+        original_clean의 몇 번째 글자였는지 알려주는 index_map도 같이 반환한다.
+        이 매핑이 있어야, 문단 단위 검사에서 줄바꿈이 살아있는 원본 그대로
+        섹션 구간을 잘라낼 수 있다.
+        """
+        original_norm, index_map = normalize_with_map(original_clean)
+        ordered_specs = [s for s in self.sections if s.code in codes]
+
+        positions = self._sequential_search(original_norm, ordered_specs, start_from=0)
+
+        doc_len = len(original_norm)
+        toc_window = doc_len * self._TOC_WINDOW_RATIO
+        clustered = [pos for pos, _ in positions.values() if pos <= toc_window]
+
+        if positions and len(clustered) >= len(positions) * self._TOC_MIN_CLUSTER_RATIO:
+            toc_end = max(clustered)
+            retried = self._sequential_search(original_norm, ordered_specs, start_from=toc_end)
+            if retried:
+                positions = retried
 
         return positions, original_norm, index_map
 

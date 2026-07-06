@@ -82,3 +82,42 @@ class AIReviewResult(models.Model):
 
     class Meta:
         verbose_name = 'AI 검토 결과'
+
+class RFPParsedData(models.Model):
+    """
+    RFP 문서에서 파싱한 정형화 데이터.
+
+    - 원본 파일은 S3(ContractDocument.file) 에 저장
+    - 파싱 결과 JSON은 이 모델(RDS)에 저장
+    - 파싱 시점: 이행관리 이관(document_complete_review) 직후 비동기
+    - parse_status 흐름: pending → processing → done | failed
+    """
+
+    document = models.OneToOneField(
+        'ContractDocument',
+        on_delete=models.CASCADE,
+        related_name='rfp_parsed',
+        # doc_type이 'rfp'인 문서에만 연결됨 (DB 제약은 없음, 앱 로직으로 보장)
+    )
+    # 노션 RFP 코드 체계(RFP-01-01 ~ RFP-04-04-11) 기반 정형화 JSON
+    parsed_json = models.JSONField(default=dict, blank=True)
+
+    parse_status = models.CharField(
+        max_length=20,
+        choices=[
+            ('pending',    '대기'),
+            ('processing', '처리중'),
+            ('done',       '완료'),
+            ('failed',     '실패'),
+        ],
+        default='pending',
+    )
+    parsed_at = models.DateTimeField(null=True, blank=True)
+    error_message = models.TextField(blank=True)
+
+    class Meta:
+        verbose_name = 'RFP 파싱 결과'
+        verbose_name_plural = 'RFP 파싱 결과 목록'
+
+    def __str__(self):
+        return f'RFP 파싱 — {self.document} [{self.parse_status}]'

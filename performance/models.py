@@ -102,7 +102,10 @@ class ExecutionPlanParsedData(models.Model):
     )
     # PEP 코드 체계(PEP-01 ~ PEP-16) 기반 정형화 JSON
     parsed_json = models.JSONField(default=dict, blank=True)
- 
+
+    # 소제목 매핑 QA 검수 리포트 (LLM/qa_agent.review_section_mapping 결과)
+    qa_report = models.JSONField('QA 검수 리포트', default=dict, blank=True)
+
     parse_status = models.CharField(
         max_length=20,
         choices=[
