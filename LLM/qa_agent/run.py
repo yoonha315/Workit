@@ -37,8 +37,9 @@ def print_report(report: dict) -> None:
     print()
     print("========== 소제목 매핑 QA 검수 ==========")
     print(f"[문서 유형]        {report['document_type']}")
-    print(f"[최종 판정]        {report['review_status']}")
-    print(f"[자동 진행 가능]   {'예' if report['can_auto_proceed'] else '아니오 (반려 코멘트 확인 필요)'}")
+    review_status = report.get("review_status") or "FAIL"
+    print(f"[최종 판정]        {review_status}")
+    print(f"[자동 진행 가능]   {format_auto_proceed(report)}")
     print(f"[전체 유사도]      {report['content_similarity']}")
     print(f"[기대 소제목 수]   {report['expected_section_count']}")
     print(f"[매칭된 소제목 수] {report['matched_section_count']}")
@@ -54,6 +55,22 @@ def print_report(report: dict) -> None:
         print(f"- [{issue['issue_type']}] {code} / {title}: {issue['message']}")
         if issue.get("sample"):
             print(f"    예시: {issue['sample']}")
+
+    comments = report.get("comments") or []
+    if comments:
+        print()
+        print(f"[평가셋 코멘트: {len(comments)}건]")
+        for comment in comments:
+            code = comment.get("code") or "-"
+            title = comment.get("title") or "-"
+            message = comment.get("message") or ""
+            print(f"- {code} / {title}: {message}")
+
+
+def format_auto_proceed(report: dict) -> str:
+    if report.get("can_auto_proceed"):
+        return "예"
+    return "아니오 (반려 코멘트 확인 필요)"
 
 
 def main() -> None:
