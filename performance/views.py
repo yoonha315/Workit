@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+from django.core.exceptions import ValidationError
 from django.shortcuts import render, get_object_or_404
 from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse, HttpResponse
@@ -9,6 +10,9 @@ from contracts.models import Contract
 from .models import Performance, Deliverable
 from .models import Deliverable, Notification, Performance
 from django.utils import timezone
+from accounts.audit import log_audit
+from accounts.models import AuditLog
+from accounts.file_validators import validate_uploaded_file
 
 logger = logging.getLogger(__name__)
 
@@ -237,6 +241,12 @@ def deliverable_upload(request, perf_id):
     if not d_type:
         return JsonResponse({'status': 'error', 'message': '산출물 유형이 없습니다.'}, status=400)
 
+    if f:
+        try:
+            validate_uploaded_file(f)
+        except ValidationError as e:
+            return JsonResponse({'status': 'error', 'message': str(e.message)}, status=400)
+
     defaults = {'status': 'submitted' if f else 'pending'}
     if f:
         defaults['file'] = f
@@ -251,6 +261,8 @@ def deliverable_upload(request, perf_id):
         deliverable_type=d_type,
         defaults=defaults,
     )
+    if f:
+        log_audit(request, AuditLog.ACTION_UPLOAD, 'deliverable', d.id, detail=f'{d_type} 업로드')
 
     # 사업수행계획서(kickoff) 파일이 새로 바뀌면, 예전 파일 기준으로 만들어진
     # QA 검수 결과·RFP 비교 결과는 더 이상 유효하지 않으므로 폐기한다.
@@ -312,6 +324,7 @@ def contract_doc_view(request, doc_id):
         ContractDocument, pk=doc_id,
         contract__created_by=request.user,
     )
+    log_audit(request, AuditLog.ACTION_VIEW, 'contract_document', doc.id)
     return render(request, 'performance/contract_doc_view.html', {
         'doc': doc,
         'contract': doc.contract,
@@ -325,6 +338,7 @@ def deliverable_view(request, del_id):
         Deliverable, pk=del_id,
         performance__contract__created_by=request.user,
     )
+    log_audit(request, AuditLog.ACTION_VIEW, 'deliverable', d.id)
     return render(request, 'performance/deliverable_view.html', {
         'deliverable': d,
         'contract': d.performance.contract,
@@ -338,6 +352,7 @@ def deliverable_analyze(request, del_id):
         Deliverable, pk=del_id,
         performance__contract__created_by=request.user,
     )
+    log_audit(request, AuditLog.ACTION_VIEW, 'deliverable', d.id)
     analyzable = DELIVERABLE_CRITERIA.get(d.deliverable_type) is not None
     is_kickoff = d.deliverable_type == 'kickoff'
     is_final = d.deliverable_type == 'final'

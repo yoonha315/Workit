@@ -64,6 +64,15 @@ DATABASES = {
     }
 }
 
+# 새로 설정/변경되는 비밀번호는 Argon2로 해시한다. PBKDF2는 목록에 남겨둬서
+# 기존에 이미 저장된 PBKDF2 해시도 계속 로그인 검증이 가능하게 한다 —
+# 다음 비밀번호 변경 시 Django가 자동으로 Argon2 해시로 재저장한다.
+PASSWORD_HASHERS = [
+    "django.contrib.auth.hashers.Argon2PasswordHasher",
+    "django.contrib.auth.hashers.PBKDF2PasswordHasher",
+    "django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher",
+]
+
 AUTH_PASSWORD_VALIDATORS = [
     {
         "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator",

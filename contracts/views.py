@@ -2,6 +2,7 @@ import json
 import os
 import re
 import sys
+from django.core.exceptions import ValidationError
 from django.http import HttpResponse
 from django.shortcuts import render, get_object_or_404, redirect
 from django.contrib.auth.decorators import login_required
@@ -9,6 +10,9 @@ from django.http import JsonResponse
 from django.views.decorators.http import require_POST
 from django.views.decorators.csrf import csrf_exempt
 from .models import Contract, ContractDocument, AIReviewResult
+from accounts.audit import log_audit
+from accounts.models import AuditLog
+from accounts.file_validators import validate_uploaded_file
 
 # rag/hwp_converter.py 등을 import할 수 있도록 프로젝트 루트의 rag 폴더를 경로에 추가
 _RAG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'rag')
@@ -29,6 +33,24 @@ def contract_list(request):
 @login_required
 def contract_create(request):
     if request.method == 'POST':
+        doc_fields = [
+            ('requirements_doc', 'requirements'),
+            ('rfp_doc', 'rfp'),
+            ('contract_doc', 'contract'),
+        ]
+
+        # 계약을 만들기 전에 첨부 파일을 전부 먼저 검증한다 — 하나라도
+        # 형식이 안 맞으면 빈 계약 레코드가 남지 않도록 함
+        pending_files = []
+        for field_name, doc_type in doc_fields:
+            f = request.FILES.get(field_name)
+            if f:
+                try:
+                    validate_uploaded_file(f)
+                except ValidationError as e:
+                    return JsonResponse({'status': 'error', 'message': str(e.message)}, status=400)
+                pending_files.append((doc_type, f))
+
         contract = Contract.objects.create(
             project_name=request.POST.get('project_name'),
             company_name=request.POST.get('company_name'),
@@ -38,21 +60,15 @@ def contract_create(request):
             created_by=request.user,
             status='reviewing',
         )
-        # Handle file uploads
-        doc_fields = [
-            ('requirements_doc', 'requirements'),
-            ('rfp_doc', 'rfp'),
-            ('contract_doc', 'contract'),
-        ]
-        for field_name, doc_type in doc_fields:
-            f = request.FILES.get(field_name)
-            if f:
-                doc = ContractDocument.objects.create(
-                    contract=contract,
-                    doc_type=doc_type,
-                    file=f,
-                    original_filename=f.name,
-                )
+        for doc_type, f in pending_files:
+            doc = ContractDocument.objects.create(
+                contract=contract,
+                doc_type=doc_type,
+                file=f,
+                original_filename=f.name,
+            )
+            log_audit(request, AuditLog.ACTION_UPLOAD, 'contract_document', doc.id, detail=f'{doc_type} 최초 업로드')
+
         return JsonResponse({'status': 'ok', 'id': contract.id, 'name': contract.project_name})
     return JsonResponse({'status': 'error'}, status=400)
 
@@ -88,6 +104,7 @@ def contract_detail_api(request, pk):
 def document_view(request, doc_id):
     """문서 이미지 뷰어 (AI 패널 없음)"""
     doc = get_object_or_404(ContractDocument, pk=doc_id, contract__created_by=request.user)
+    log_audit(request, AuditLog.ACTION_VIEW, 'contract_document', doc.id)
     return render(request, 'contracts/document_view.html', {
         'doc': doc,
         'contract': doc.contract,
@@ -97,6 +114,7 @@ def document_view(request, doc_id):
 @login_required
 def document_analyze(request, doc_id):
     doc = get_object_or_404(ContractDocument, pk=doc_id, contract__created_by=request.user)
+    log_audit(request, AuditLog.ACTION_VIEW, 'contract_document', doc.id)
     try:
         result = doc.review_result
     except AIReviewResult.DoesNotExist:
@@ -294,6 +312,11 @@ def contract_update_file(request, pk):
     if not f or not doc_type:
         return JsonResponse({'status': 'error', 'message': '파일 또는 문서 유형이 없습니다.'}, status=400)
 
+    try:
+        validate_uploaded_file(f)
+    except ValidationError as e:
+        return JsonResponse({'status': 'error', 'message': str(e.message)}, status=400)
+
     existing = contract.documents.filter(doc_type=doc_type).first()
     if existing:
         existing.file = f
@@ -302,13 +325,16 @@ def contract_update_file(request, pk):
         existing.save()
         # 파일이 바뀌면 기존 AI 분석 결과는 유효하지 않으므로 폐기
         AIReviewResult.objects.filter(document=existing).delete()
+        target_id = existing.id
     else:
-        ContractDocument.objects.create(
+        doc = ContractDocument.objects.create(
             contract=contract,
             doc_type=doc_type,
             file=f,
             original_filename=f.name,
         )
+        target_id = doc.id
+    log_audit(request, AuditLog.ACTION_UPLOAD, 'contract_document', target_id, detail=f'{doc_type} 재업로드')
     return JsonResponse({'status': 'ok', 'filename': f.name})
 
 def _get_pdf_path_for_view(doc):
