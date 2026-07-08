@@ -227,3 +227,45 @@ class User(AbstractUser):
 
     def __str__(self):
         return f"{self.korean_name()} ({self.organization})"
+
+
+class AuditLog(models.Model):
+    """계약서·산출물 조회/업로드/삭제 등 주요 행위에 대한 감사 로그.
+
+    - 수정·삭제 API를 제공하지 않아 사실상 append-only(불변)이다.
+    - user·organization·action·ip_address·발생 시각을 남겨, 추후 감사 시
+      "누가 언제 어떤 문서에 무엇을 했는지" 추적할 수 있게 한다.
+    - 기록은 accounts.audit.log_audit()을 통해서만 남긴다(형식 통일 목적).
+    """
+
+    ACTION_VIEW = "view"
+    ACTION_UPLOAD = "upload"
+    ACTION_DELETE = "delete"
+    ACTION_CHOICES = (
+        (ACTION_VIEW, "조회"),
+        (ACTION_UPLOAD, "업로드"),
+        (ACTION_DELETE, "삭제"),
+    )
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
+        related_name="audit_logs", verbose_name="행위자",
+    )
+    organization = models.ForeignKey(
+        Organization, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="audit_logs", verbose_name="소속부서",
+    )
+    action = models.CharField("행위", max_length=20, choices=ACTION_CHOICES)
+    target_type = models.CharField("대상 유형", max_length=50)
+    target_id = models.PositiveIntegerField("대상 ID", null=True, blank=True)
+    detail = models.CharField("상세", max_length=255, blank=True)
+    ip_address = models.GenericIPAddressField("접속 IP", null=True, blank=True)
+    created_at = models.DateTimeField("발생 일시", auto_now_add=True)
+
+    class Meta:
+        verbose_name = "감사 로그"
+        verbose_name_plural = "감사 로그 목록"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"[{self.created_at:%Y-%m-%d %H:%M}] {self.user} {self.get_action_display()} {self.target_type}#{self.target_id}"

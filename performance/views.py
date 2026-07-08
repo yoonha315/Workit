@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+from django.core.exceptions import ValidationError
 from django.shortcuts import render, get_object_or_404
 from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse, HttpResponse
@@ -9,6 +10,9 @@ from contracts.models import Contract
 from .models import Performance, Deliverable
 from .models import Deliverable, Notification, Performance
 from django.utils import timezone
+from accounts.audit import log_audit
+from accounts.models import AuditLog
+from accounts.file_validators import validate_uploaded_file
 
 logger = logging.getLogger(__name__)
 
@@ -43,28 +47,6 @@ def performance_list(request):
         contract__status__in=['in_progress', 'completed']
     ).order_by('-created_at').select_related('contract')
 
-    # Build calendar events - 산출물별 기간(start~end) 바 형태로 표시
-    # calendar_events = []
-    # for idx, perf in enumerate(performances):
-    #     color = PROJECT_COLORS[idx % len(PROJECT_COLORS)]
-    #     contract = perf.contract
-    #     if contract.contract_start and contract.contract_end:
-    #         is_done = contract.status == 'completed'
-    #         calendar_events.append({
-    #             'id': f'contract_period_{perf.id}',
-    #             'performance_id': perf.id,
-    #             'project_name': contract.project_name,
-    #             'deliverable_type': '계약 기간',
-    #             'start_date': contract.contract_start.strftime('%Y-%m-%d'),
-    #             'end_date': contract.contract_end.strftime('%Y-%m-%d'),
-    #             'due_date': contract.contract_end.strftime('%Y-%m-%d'),
-    #             'submitted_date': None,
-    #             'status': contract.status,
-    #             'color': '#999999' if is_done else color,
-    #             'is_completed': is_done,
-    #             'is_contract_period': True,
-    #         })
-
     TARGET_DELIVERABLE_TYPES = ['tech_apply', 'final']
 
     calendar_events = []
@@ -74,24 +56,8 @@ def performance_list(request):
         contract = perf.contract
         is_done  = contract.status == 'completed'
 
-        # 1. 계약 전체 기간 줄
-        if contract.contract_start and contract.contract_end:
-            calendar_events.append({
-                'id': f'contract_period_{perf.id}',
-                'performance_id': perf.id,
-                'project_name': contract.project_name,
-                'deliverable_type': '계약 기간',
-                'start_date': contract.contract_start.strftime('%Y-%m-%d'),
-                'end_date': contract.contract_end.strftime('%Y-%m-%d'),
-                'due_date': contract.contract_end.strftime('%Y-%m-%d'),
-                'submitted_date': None,
-                'status': contract.status,
-                'color': '#999999' if is_done else color,
-                'is_completed': is_done,
-                'is_contract_period': True,
-            })
-
-        # 2. 기술 적용 결과표 + 결과 보고서만 달력 표시
+        # 산출물(기술적용결과표·결과보고서) 제출 일자만 달력에 표시한다
+        # (계약 기간 줄은 더 이상 달력에 표시하지 않음 — 이행 현황 카드에 텍스트로 노출)
         target_deliverables = perf.deliverables.filter(
             deliverable_type__in=TARGET_DELIVERABLE_TYPES,
         ).order_by('due_date')
@@ -112,7 +78,6 @@ def performance_list(request):
                 'status': d.status,
                 'color': '#999999' if (is_done or d.status == 'submitted') else color,
                 'is_completed': is_done or d.status == 'submitted',
-                'is_contract_period': False,
             })
 
     return render(request, 'performance/performance_list.html', {
@@ -237,6 +202,12 @@ def deliverable_upload(request, perf_id):
     if not d_type:
         return JsonResponse({'status': 'error', 'message': '산출물 유형이 없습니다.'}, status=400)
 
+    if f:
+        try:
+            validate_uploaded_file(f)
+        except ValidationError as e:
+            return JsonResponse({'status': 'error', 'message': str(e.message)}, status=400)
+
     defaults = {'status': 'submitted' if f else 'pending'}
     if f:
         defaults['file'] = f
@@ -251,6 +222,8 @@ def deliverable_upload(request, perf_id):
         deliverable_type=d_type,
         defaults=defaults,
     )
+    if f:
+        log_audit(request, AuditLog.ACTION_UPLOAD, 'deliverable', d.id, detail=f'{d_type} 업로드')
 
     # 사업수행계획서(kickoff) 파일이 새로 바뀌면, 예전 파일 기준으로 만들어진
     # QA 검수 결과·RFP 비교 결과는 더 이상 유효하지 않으므로 폐기한다.
@@ -312,6 +285,7 @@ def contract_doc_view(request, doc_id):
         ContractDocument, pk=doc_id,
         contract__created_by=request.user,
     )
+    log_audit(request, AuditLog.ACTION_VIEW, 'contract_document', doc.id)
     return render(request, 'performance/contract_doc_view.html', {
         'doc': doc,
         'contract': doc.contract,
@@ -325,6 +299,7 @@ def deliverable_view(request, del_id):
         Deliverable, pk=del_id,
         performance__contract__created_by=request.user,
     )
+    log_audit(request, AuditLog.ACTION_VIEW, 'deliverable', d.id)
     return render(request, 'performance/deliverable_view.html', {
         'deliverable': d,
         'contract': d.performance.contract,
@@ -338,6 +313,7 @@ def deliverable_analyze(request, del_id):
         Deliverable, pk=del_id,
         performance__contract__created_by=request.user,
     )
+    log_audit(request, AuditLog.ACTION_VIEW, 'deliverable', d.id)
     analyzable = DELIVERABLE_CRITERIA.get(d.deliverable_type) is not None
     is_kickoff = d.deliverable_type == 'kickoff'
     is_final = d.deliverable_type == 'final'

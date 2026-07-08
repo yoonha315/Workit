@@ -1,5 +1,6 @@
 # Django
 Django==6.0.5
+argon2-cffi
 
 # AI / ML
 torch
