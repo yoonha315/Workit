@@ -22,8 +22,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import os
-import torch
-from FlagEmbedding import BGEM3FlagModel, FlagReranker
 from qdrant_client import QdrantClient
 from qdrant_client.models import Fusion, FusionQuery, Prefetch, SparseVector
 
@@ -35,9 +33,6 @@ COLLECTION_JO = "law_kb_jo"
 
 EMBED_MODEL_NAME = "BAAI/bge-m3"
 RERANKER_MODEL_NAME = "BAAI/bge-reranker-v2-m3"
-
-# fp16은 GPU 전용 — CPU 환경에서는 자동으로 꺼진다.
-USE_FP16 = torch.cuda.is_available()
 
 DEFAULT_ALPHA = 0.7
 DEFAULT_RRF_K = 20
@@ -69,11 +64,19 @@ def get_qdrant_client(host: str = QDRANT_HOST, port: int = QDRANT_PORT) -> Qdran
 
 
 def load_embed_model() -> BGEM3FlagModel:
-    return BGEM3FlagModel(EMBED_MODEL_NAME, use_fp16=USE_FP16)
+    # torch/FlagEmbedding은 로컬 직접 추론 때만 필요 — RunPod 원격 추론 전용 환경(EC2 등)에서는
+    # 이 함수 자체가 호출되지 않으므로 설치할 필요가 없다. 그래서 여기서 지연 import한다.
+    import torch
+    from FlagEmbedding import BGEM3FlagModel
+
+    return BGEM3FlagModel(EMBED_MODEL_NAME, use_fp16=torch.cuda.is_available())
 
 
 def load_reranker() -> FlagReranker:
-    return FlagReranker(RERANKER_MODEL_NAME, use_fp16=USE_FP16)
+    import torch
+    from FlagEmbedding import FlagReranker
+
+    return FlagReranker(RERANKER_MODEL_NAME, use_fp16=torch.cuda.is_available())
 
 
 # ── 검색 파이프라인 ────────────────────────────────────────────────
