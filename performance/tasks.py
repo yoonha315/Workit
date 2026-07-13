@@ -145,6 +145,20 @@ def parse_execution_plan_task(self, deliverable_id: int):
 
         with local_copy(deliverable.file) as _local:
             text = extract_text(_local)
+
+            # 표 안 개별 셀 완전성 검사. qa_agent는 소제목 블록 전체를 하나의
+            # 텍스트로 보기 때문에, 표 안 특정 칸 하나가 비어 있어도 같은
+            # 소제목에 다른 내용이 많으면 통과시켜버린다 — 그 사각지대를
+            # 표 단위로 보완한다. PDF가 아닌 원본(HWP 등)은 건너뛴다.
+            sparse_cells = []
+            if _local.lower().endswith('.pdf'):
+                try:
+                    from performance.table_completeness_checker import find_empty_required_cells
+                    sparse_cells = find_empty_required_cells(_local)
+                except Exception:
+                    import traceback
+                    print(f'[parse_execution_plan_task] 표 빈칸 검사 실패 — deliverable_id={deliverable_id}\n{traceback.format_exc()}')
+
         if not text.strip():
             raise ValueError('과업수행계획서 텍스트 추출 실패 — 파일을 확인하세요.')
 
@@ -167,6 +181,24 @@ def parse_execution_plan_task(self, deliverable_id: int):
         except Exception:
             import traceback
             print(f'[parse_execution_plan_task] QA 검수 실패 — deliverable_id={deliverable_id}\n{traceback.format_exc()}')
+
+        if qa_report and sparse_cells:
+            for i, cell in enumerate(sparse_cells):
+                code = f'TABLE-{i + 1}'
+                location = f"{cell['table']} 표 ({cell['page']}페이지)"
+                qa_report.setdefault('issues', []).append({
+                    'issue_type': 'empty_table_cell', 'code': code, 'title': cell['table'],
+                    'location': location, 'message': cell['message'], 'sample': '',
+                    'severity': 'review', 'related_code': '', 'related_title': '',
+                    'parsed_sample': '', 'expected_missing': [], 'similarity_score': 0.0,
+                })
+                qa_report.setdefault('comments', []).append({
+                    'code': code, 'title': cell['table'], 'location': location,
+                    'message': cell['message'],
+                })
+            qa_report['review_status'] = 'FAIL'
+            qa_report['passed'] = False
+            qa_report['can_auto_proceed'] = False
 
         qa_issues = qa_report.get('issues', [])
         from performance.models import AIAnalysisLog
