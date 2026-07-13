@@ -8,7 +8,7 @@ Workit - JoRAG 검색 모듈 (최종 확정판)
 쪼갰는지 몰라도 되고, 질의 텍스트 하나를 받아 검색만 한다.
 
 확정된 하이퍼파라미터:
-    alpha=0.7, rrf_k=20, fetch_k=50, rerank_k=10, reranker=bge-reranker-v2-m3 (ON), top_k=2
+    alpha=0.7, rrf_k=20, fetch_k=80, rerank_k=20, reranker=bge-reranker-v2-m3 (ON), top_k=2
 
 스코어 threshold: min_score=0.8 (score_threshold_check 근거, alpha=0.7 조건 — 재검증 필요)
     필터링 후 후보가 0개면 fallback으로 top_k개를 그대로 반환한다(1등·2등이 근소하게
@@ -36,10 +36,10 @@ RERANKER_MODEL_NAME = "BAAI/bge-reranker-v2-m3"
 
 DEFAULT_ALPHA = 0.7
 DEFAULT_RRF_K = 20
-DEFAULT_FETCH_K = 50
-DEFAULT_RERANK_K = 10
+DEFAULT_FETCH_K = 80
+DEFAULT_RERANK_K = 20
 DEFAULT_TOP_K = 2
-DEFAULT_MIN_SCORE = 0.8  # rerank_score 기준. reranker OFF(rrf_score)에는 적용 안 함
+DEFAULT_MIN_SCORE = 0.8  # rerank_score 기준
 
 
 # ── 데이터 모델 ────────────────────────────────────────────────────
