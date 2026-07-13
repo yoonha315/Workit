@@ -580,6 +580,10 @@ function renderComparisonHtml(cmp) {
       </li>`;
     });
     html += `</ul>`;
+  } else if (!cmp.satisfied_count && !cmp.partial_count && !cmp.unsatisfied_count) {
+    // 세 카운트가 모두 0이면 "다 충족"이 아니라 "비교할 항목 자체가 없었다"는 뜻이므로
+    // 안심시키는 문구 대신 확인이 필요하다는 문구를 보여준다.
+    html += `<p style="font-size:13px; color:#888; padding:10px 0;">비교할 항목이 없습니다 — RFP/${COMPARE_TARGET_LABEL} 파싱 결과를 확인하세요.</p>`;
   } else {
     html += `<p style="font-size:13px; color:#888; padding:10px 0;">${COMPARE_TARGET_LABEL} 대비 미흡한 항목이 발견되지 않았습니다.</p>`;
   }

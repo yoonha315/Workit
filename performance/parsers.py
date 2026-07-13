@@ -901,10 +901,12 @@ def collect_llm_compare_items_rfp_pep(rfp_json: dict, pep_json: dict) -> list[di
     이어붙여 pep_excerpt로 쓰고, 없으면 빈 문자열로 둬서 LLM이 "본문에 없음"으로
     정확히 판정하게 한다(억지로 값을 지어내지 않는다).
     """
+    rfp_sections = rfp_json.get('sections', {})
+
     items = []
     for mapping in _RFP_TO_PEP_MAPPING:
         rfp_code = mapping['rfp_code']
-        rfp_section = rfp_json.get(rfp_code, {})
+        rfp_section = rfp_sections.get(rfp_code, {})
         if not rfp_section.get('found', False):
             continue
 
