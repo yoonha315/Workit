@@ -1,18 +1,30 @@
+import hashlib
 import json
 import os
 import re
 import sys
+import tempfile
+from contextlib import contextmanager
+from datetime import timedelta
+from django.core.files.base import File
+from django.core.files.storage import default_storage
 from django.core.exceptions import ValidationError
 from django.http import HttpResponse
 from django.shortcuts import render, get_object_or_404, redirect
 from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse
+from django.utils import timezone
 from django.views.decorators.http import require_POST
 from django.views.decorators.csrf import csrf_exempt
 from .models import Contract, ContractDocument, AIReviewResult
 from accounts.audit import log_audit
 from accounts.models import AuditLog
 from accounts.file_validators import validate_uploaded_file
+
+# celery worker가 죽는 등 이유로 task가 끝을 못 맺으면 status='processing'인 채로
+# 영원히 멈춘다. 이 시간이 지나면 멈춘 것으로 보고 재분석을 허용한다.
+# (RunPod 기준 실측 소요시간 ~30분 + 여유)
+AI_ANALYSIS_STALE_MINUTES = 60
 
 # rag/hwp_converter.py 등을 import할 수 있도록 프로젝트 루트의 rag 폴더를 경로에 추가
 _RAG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'rag')
@@ -120,11 +132,20 @@ def document_analyze(request, doc_id):
     except AIReviewResult.DoesNotExist:
         result = None
 
+    # 화면을 나갔다 돌아와도 "분석중" 상태가 유지되도록 status를 함께 확인한다.
+    # started_at이 너무 오래됐으면(celery worker가 죽는 등) 멈춘 것으로 보고
+    # 다시 분석 시작 버튼을 보여준다.
+    is_processing = False
+    if result and result.status == 'processing' and result.started_at:
+        is_processing = timezone.now() - result.started_at <= timedelta(minutes=AI_ANALYSIS_STALE_MINUTES)
+
+    is_done = bool(result and result.status == 'done')
+
     # JSONField(blanks/typos/legal_issues) 안에 Python None/True/False가 섞여 있으면
     # 템플릿에서 {{ ... |safe }}로 그대로 출력될 때 JS 입장에서 깨진 문법(None, True, False)이
     # 되어버린다(JS에는 null/true/false만 있음). json.dumps로 미리 직렬화해서 넘긴다.
     result_json = None
-    if result:
+    if is_done:
         result_json = json.dumps({
             'blanks': result.blanks or [],
             'typos': result.typos or [],
@@ -134,8 +155,11 @@ def document_analyze(request, doc_id):
     return render(request, 'contracts/document_analyze.html', {
         'doc': doc,
         'contract': doc.contract,
-        'result': result,
+        'result': result if is_done else None,
         'result_json': result_json,
+        'is_processing': is_processing,
+        'task_id': result.task_id if is_processing else '',
+        'stale_minutes': AI_ANALYSIS_STALE_MINUTES,
     })
 
 
@@ -144,8 +168,23 @@ def document_analyze(request, doc_id):
 def document_ai_analyze(request, doc_id):
     """AI 분석 태스크 시작"""
     doc = get_object_or_404(ContractDocument, pk=doc_id, contract__created_by=request.user)
+
+    existing = AIReviewResult.objects.filter(document=doc).first()
+    if existing and existing.status == 'processing' and existing.started_at:
+        stale = timezone.now() - existing.started_at > timedelta(minutes=AI_ANALYSIS_STALE_MINUTES)
+        if not stale:
+            # 이미 진행 중인 분석이 있다 — 중복으로 새 task를 띄우지 않고
+            # (같은 GPU를 동시에 두 번 쓰면 충돌한다) 기존 task_id로 폴링을 이어가게 한다.
+            return JsonResponse({'status': 'already_running', 'task_id': existing.task_id})
+
     from contracts.tasks import analyze_document_task
     task = analyze_document_task.delay(doc_id)
+
+    AIReviewResult.objects.update_or_create(
+        document=doc,
+        defaults={'status': 'processing', 'task_id': task.id, 'started_at': timezone.now()},
+    )
+
     return JsonResponse({'status': 'started', 'task_id': task.id})
 
 
@@ -224,8 +263,9 @@ def document_complete_review(request, doc_id):
     contract.status = 'in_progress'
 
     try:
-        from contracts.utils import extract_text
-        text = extract_text(doc.file.path)
+        from contracts.utils import extract_text, local_copy
+        with local_copy(doc.file) as _local:
+            text = extract_text(_local)
 
         # 1. 계약기간 추출
         # "2026년 6월 1일부터 2026년 7월 31일까지" / "2025년 03월 01일 ~ 2025년 12월 31일" 등
@@ -337,39 +377,37 @@ def contract_update_file(request, pk):
     log_audit(request, AuditLog.ACTION_UPLOAD, 'contract_document', target_id, detail=f'{doc_type} 재업로드')
     return JsonResponse({'status': 'ok', 'filename': f.name})
 
-def _get_pdf_path_for_view(doc):
+@contextmanager
+def _pdf_local_path(doc):
     """
-    뷰어/페이지수 조회용 PDF 경로를 반환한다.
-    HWP 파일이면 LibreOffice로 변환한 PDF를 media/contracts/_hwp_cache/ 에 캐시해두고
-    재사용한다(매 요청마다 변환하면 느리기 때문).
-    PDF면 원본 경로를 그대로 반환한다.
+    뷰어/페이지수 조회용 로컬 PDF 경로를 yield한다 (S3/로컬 스토리지 공용).
+    HWP 파일이면 LibreOffice로 변환한 PDF를 S3의 contracts/_hwp_cache/ prefix에
+    캐시해두고 재사용한다(매 요청마다 변환하면 느리기 때문 — 계약서 원문이 서버
+    로컬 디스크에 평문으로 쌓이는 것도 피할 수 있다). 문서가 재업로드되면
+    doc.file.name(S3 키)이 바뀌므로(AWS_S3_FILE_OVERWRITE=False) 캐시가 자동 무효화된다.
+    PDF면 로컬로 내려받은 경로를 그대로 넘긴다.
     """
-    file_path = doc.file.path
-    if not file_path.lower().endswith('.hwp'):
-        return file_path
+    from contracts.utils import local_copy
 
-    from django.conf import settings
-    cache_dir = os.path.join(settings.MEDIA_ROOT, 'contracts', '_hwp_cache')
-    os.makedirs(cache_dir, exist_ok=True)
+    if not doc.file.name.lower().endswith('.hwp'):
+        with local_copy(doc.file) as src:
+            yield src
+        return
 
-    cached_pdf_path = os.path.join(
-        cache_dir,
-        os.path.splitext(os.path.basename(file_path))[0] + '.pdf'
-    )
+    cache_key = f'contracts/_hwp_cache/{hashlib.sha1(doc.file.name.encode()).hexdigest()[:16]}.pdf'
 
-    # 이미 변환된 캐시가 있고 원본보다 최신이면 그대로 사용
-    if os.path.exists(cached_pdf_path) and os.path.getmtime(cached_pdf_path) >= os.path.getmtime(file_path):
-        return cached_pdf_path
+    if default_storage.exists(cache_key):
+        with default_storage.open(cache_key, 'rb') as f, local_copy(File(f, name=cache_key)) as cached:
+            yield cached
+        return
 
-    from hwp_converter import convert_hwp_to_pdf
-    converted_path = convert_hwp_to_pdf(file_path, cache_dir)
-
-    # convert_hwp_to_pdf가 만든 파일명이 cached_pdf_path와 다를 수 있으니 통일
-    if converted_path != cached_pdf_path and os.path.exists(converted_path):
-        import shutil as _shutil
-        _shutil.move(converted_path, cached_pdf_path)
-
-    return cached_pdf_path
+    with local_copy(doc.file) as src:
+        from hwp_converter import convert_hwp_to_pdf
+        tmp_dir = tempfile.mkdtemp()
+        converted = convert_hwp_to_pdf(src, tmp_dir)
+        with open(converted, 'rb') as f:
+            default_storage.save(cache_key, File(f))
+        yield converted
 
 
 @login_required
@@ -378,28 +416,18 @@ def document_page_image(request, doc_id, page):
     
     try:
         from pdf2image import convert_from_path
-        import io, shutil, tempfile
+        import io
 
-        poppler_path = r"C:\poppler-24.08.0\Library\bin"
         poppler_path = r"C:\poppler-24.08.0\Library\bin" if os.name == 'nt' else None
 
-        source_path = _get_pdf_path_for_view(doc)  # HWP면 변환된 PDF 경로, PDF면 원본 그대로
-
-        # 한글 경로 문제 해결 - 임시 파일로 복사
-        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp:
-            tmp_path = tmp.name
-            # print(f"tmp_path: {tmp_path}")
-            shutil.copy2(source_path, tmp_path)
-
-        images = convert_from_path(
-            tmp_path,
-            dpi=150,
-            first_page=page,
-            last_page=page,
-            poppler_path=poppler_path,
-        )
-
-        os.unlink(tmp_path)  # 임시 파일 삭제
+        with _pdf_local_path(doc) as source_path:  # HWP면 변환된 PDF 경로, PDF면 원본 그대로
+            images = convert_from_path(
+                source_path,
+                dpi=150,
+                first_page=page,
+                last_page=page,
+                poppler_path=poppler_path,
+            )
 
         if not images:
             return HttpResponse(status=404)
@@ -424,12 +452,11 @@ def document_page_count(request, doc_id):
         
         poppler_path = r"C:\poppler-24.08.0\Library\bin"
 
-        source_path = _get_pdf_path_for_view(doc)  # HWP면 변환된 PDF 경로, PDF면 원본 그대로
-
-        info = pdfinfo_from_path(
-            source_path,
-            poppler_path=poppler_path if os.name == 'nt' else None,
-        )
+        with _pdf_local_path(doc) as source_path:  # HWP면 변환된 PDF 경로, PDF면 원본 그대로
+            info = pdfinfo_from_path(
+                source_path,
+                poppler_path=poppler_path if os.name == 'nt' else None,
+            )
         return JsonResponse({'pages': info['Pages']})
     
     except Exception as e:

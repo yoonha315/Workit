@@ -5,6 +5,36 @@ contracts/utils.py
 - parse_to_workit(): RAG+sLLM 결과 → Workit AIReviewResult 형식 변환
 """
 
+import os
+import re
+import tempfile
+from contextlib import contextmanager
+
+_VERDICT_RE = re.compile(r"판정\s*:\s*(\S+)")
+
+
+@contextmanager
+def local_copy(filefield):
+    """S3/로컬 공용: FileField를 임시 로컬 파일로 내려받아 경로를 yield. 원본 확장자 유지."""
+    ext = os.path.splitext(filefield.name)[1] or '.bin'
+    tmp = tempfile.NamedTemporaryFile(suffix=ext, delete=False)
+    try:
+        filefield.open('rb')
+        for chunk in filefield.chunks():
+            tmp.write(chunk)
+        tmp.flush()
+        tmp.close()
+        try:
+            filefield.close()
+        except Exception:
+            pass
+        yield tmp.name
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+
 
 def extract_text(file_path: str) -> str:
     """업로드된 파일 경로를 받아 텍스트 문자열 반환."""
@@ -79,7 +109,7 @@ def parse_to_workit(inference_results: list) -> dict:
     }
 
     필터링 기준:
-    - "판정: 정상" 항목 제외
+    - 판정이 "일치"/"충족"(정상)인 항목 제외
     - 동일 조항 번호 중복 제거 (첫 번째 위반/누락 항목만 사용)
     """
     legal_issues = []
@@ -95,7 +125,11 @@ def parse_to_workit(inference_results: list) -> dict:
             continue
 
         # 정상 판정 제외 (계약서='일치', 산출물='충족')
-        if ('판정: 일치' in prediction) or ('판정: 충족' in prediction):
+        # 문자열 통짜 매칭 대신 "판정: X" 값을 직접 파싱해서 비교한다 — sLLM 출력의
+        # 공백/줄바꿈 변형(예: "판정:일치", 뒤에 다른 말이 붙는 경우)에도 안정적으로 걸러진다.
+        verdict_match = _VERDICT_RE.search(prediction)
+        verdict = verdict_match.group(1).strip() if verdict_match else ''
+        if verdict in ('일치', '충족'):
             continue
 
         # 동일 조항 번호 중복 제거
