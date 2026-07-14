@@ -14,6 +14,11 @@ app.conf.broker_transport_options = {
     'socket_connect_timeout': 10,
 }
 
+# celerybeat-schedule.* 파일이 프로젝트 루트에 그대로 쌓이지 않도록 전용 폴더에 저장한다.
+_VAR_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'var')
+os.makedirs(_VAR_DIR, exist_ok=True)
+app.conf.beat_schedule_filename = os.path.join(_VAR_DIR, 'celerybeat-schedule')
+
 app.conf.beat_schedule = {
     'check-deliverable-deadlines': {
         'task': 'performance.tasks.check_deadlines',

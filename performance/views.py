@@ -53,7 +53,7 @@ def performance_list(request):
         contract__status__in=['in_progress', 'completed']
     ).order_by('-created_at').select_related('contract')
 
-    TARGET_DELIVERABLE_TYPES = ['tech_apply', 'final']
+    TARGET_DELIVERABLE_TYPES = ['kickoff', 'tech_apply', 'final']
 
     calendar_events = []
 
@@ -62,7 +62,9 @@ def performance_list(request):
         contract = perf.contract
         is_done  = contract.status == 'completed'
 
-        # 산출물(기술적용결과표·결과보고서) 제출 일자만 달력에 표시한다
+        # 산출물(사업수행계획서·기술적용결과표·결과보고서) 제출 일자를 달력에 표시한다.
+        # 사업수행계획서는 자동 추출 로직이 없어 캘린더 아이콘으로 수동 입력해야
+        # due_date가 채워지는데, 채워지기만 하면 나머지 둘과 동일하게 표시된다.
         # (계약 기간 줄은 더 이상 달력에 표시하지 않음 — 이행 현황 카드에 텍스트로 노출)
         target_deliverables = perf.deliverables.filter(
             deliverable_type__in=TARGET_DELIVERABLE_TYPES,
@@ -181,8 +183,7 @@ def _reset_kickoff_analysis(d, perf):
         parsed_at=None, error_message='',
     )
     RFPComparisonResult.objects.filter(performance=perf).delete()
-    # 사업추진결과보고서(final)의 2단계 비교(PEP ↔ RPT)도 이 사업수행계획서를
-    # 근거로 만든 것이라 함께 폐기한다.
+    # 사업추진결과보고서(final)의 2단계 비교(PEP ↔ RPT)도 이 사업수행계획서를 근거로 만든 것이라 함께 폐기한다.
     PEPFinalComparisonResult.objects.filter(performance=perf).delete()
 
 
@@ -231,8 +232,7 @@ def deliverable_upload(request, perf_id):
     if f:
         log_audit(request, AuditLog.ACTION_UPLOAD, 'deliverable', d.id, detail=f'{d_type} 업로드')
 
-    # 사업수행계획서(kickoff) 파일이 새로 바뀌면, 예전 파일 기준으로 만들어진
-    # QA 검수 결과·RFP 비교 결과는 더 이상 유효하지 않으므로 폐기한다.
+    # 사업수행계획서(kickoff) 파일이 새로 바뀌면, 예전 파일 기준으로 만들어진 QA 검수 결과·RFP 비교 결과는 더 이상 유효하지 않으므로 폐기한다.
     # (재분석 전까지는 deliverable_analyze 화면에서 "분석 시작" 단계부터 다시 노출됨)
     if d_type == 'kickoff' and f:
         _reset_kickoff_analysis(d, perf)
@@ -242,14 +242,13 @@ def deliverable_upload(request, perf_id):
         from .tasks import sync_deliverable_dates_from_kickoff_task
         sync_deliverable_dates_from_kickoff_task.delay(d.id)
 
-    # 기술적용결과표 파일이 새로 바뀌면, 예전 파일 기준 검증 결과는 더 이상
-    # 유효하지 않으므로 폐기한다 (재분석 전까지는 "분석 시작" 초기 화면부터 다시 노출됨)
+    # 기술적용결과표 파일이 새로 바뀌면, 예전 파일 기준 검증 결과는 더 이상 유효하지 않으므로 폐기한다 
+    # (재분석 전까지는 "분석 시작" 초기 화면부터 다시 노출됨)
     if d_type == 'tech_apply' and f:
         from .models import TechApplyCheckResult
         TechApplyCheckResult.objects.filter(deliverable=d).delete()
 
-    # 사업추진결과보고서(final) 파일이 새로 바뀌면, kickoff와 동일한 이유로
-    # 이전 QA 검수 결과·RFP 비교 결과를 폐기한다.
+    # 사업추진결과보고서(final) 파일이 새로 바뀌면, kickoff와 동일한 이유로 이전 QA 검수 결과·RFP 비교 결과를 폐기한다.
     if d_type == 'final' and f:
         from .models import FinalReportParsedData, PEPFinalComparisonResult
         FinalReportParsedData.objects.filter(deliverable=d).update(
@@ -270,15 +269,12 @@ def deliverable_update_due_date(request, perf_id):
     due_date = data.get('due_date')
 
     d, _ = Deliverable.objects.get_or_create(performance=perf, deliverable_type=d_type)
-    if due_date:
-        d.due_date = due_date
-        d.save()
+    d.due_date = due_date or None  # 빈 문자열이면 '삭제'로 취급해 필드를 비운다
+    d.save()
     return JsonResponse({'status': 'ok'})
 
 
-# ──────────────────────────────────────────────────────────────
 # 산출물 문서 뷰어 / AI 분석
-# ──────────────────────────────────────────────────────────────
 
 @login_required
 def contract_doc_view(request, doc_id):
@@ -329,8 +325,7 @@ def deliverable_analyze(request, del_id):
     # 비교한다는 점만 다르고 "파싱 → qa_agent 검수 → 2단계 비교" 흐름 자체는 동일하다.
     qa_data = None
     comparison_data = None
-    # 대응비교가 LLM 판정 때문에 수 분 걸릴 수 있어, 화면을 나갔다 돌아와도
-    # "진행중" 상태와 task_id를 이어받을 수 있게 같이 계산해둔다.
+    # 대응비교가 LLM 판정 때문에 수 분 걸릴 수 있어, 화면을 나갔다 돌아와도 "진행중" 상태와 task_id를 이어받을 수 있게 같이 계산해둔다.
     compare_is_processing = False
     compare_task_id = ''
     if is_kickoff:
@@ -362,9 +357,8 @@ def deliverable_analyze(request, del_id):
                 comparison_data = comparison.comparison_json
 
     # 사업수행계획서(kickoff) 전용 "2단계 · RFP 매핑" — RFP는 계약관리→이행관리 이관
-    # 시점에 이미 자동으로 파싱·QA가 끝나 있는 경우가 대부분이라, 그 결과를 그대로
-    # 복원한다. 아직 안 끝났으면(또는 예전 계약이라 qa_report가 비어 있으면)
-    # 프론트에서 "RFP AI 분석 시작" 버튼을 눌러 새로 실행할 수 있다.
+    # 시점에 이미 자동으로 파싱·QA가 끝나 있는 경우가 대부분이라, 그 결과를 그대로 복원한다. 
+    # 아직 안 끝났으면(또는 예전 계약이라 qa_report가 비어 있으면) 프론트에서 "RFP AI 분석 시작" 버튼을 눌러 새로 실행할 수 있다.
     rfp_qa_data = None
     rfp_doc_id = None
     if is_kickoff:
@@ -773,12 +767,11 @@ def deliverable_ai_analyze(request, del_id):
 
 @login_required
 def deliverable_export_pdf(request, del_id):
-    """산출물 AI 대응비교 결과를 PDF로 다운로드.
+    """산출물 AI 분석 결과를 PDF로 다운로드.
 
-    kickoff(사업수행계획서)는 RFPComparisonResult, final(사업추진결과보고서)은
-    PEPFinalComparisonResult에 저장된 comparison_json(충족/검토/불가 + LLM 근거)을
-    DB에서 그대로 읽어 PDF로 만든다 (contracts.document_export_pdf와 동일한
-    GET + DB 조회 패턴 — 브라우저가 분석 결과를 다시 보내줄 필요가 없다).
+    kickoff(사업수행계획서)는 RFPComparisonResult, final(사업추진결과보고서)은 PEPFinalComparisonResult에 저장된 comparison_json(충족/검토/불가 + LLM 근거)을,
+    tech_apply(기술적용결과표)는 TechApplyCheckResult.result_json(체크박스 정합성 검증 결과)을 DB에서 그대로 읽어 PDF로 만든다.
+    (contracts.document_export_pdf와 동일한 GET + DB 조회 패턴 — 브라우저가 분석 결과를 다시 보내줄 필요가 없다).
     """
     from reportlab.lib.pagesizes import A4
     from reportlab.lib import colors
@@ -796,19 +789,27 @@ def deliverable_export_pdf(request, del_id):
         performance__contract__created_by=request.user,
     )
 
+    tech_result = None
+    comparison = None
+    cmp = {}
     if d.deliverable_type == 'kickoff':
         comparison = d.performance.rfp_comparisons.first()
         target_label = '제안요청서(RFP) 대응비교'
+        if not comparison or comparison.status != 'done':
+            return HttpResponse("대응비교 결과가 없습니다. AI 분석을 먼저 실행해주세요.", status=400)
+        cmp = comparison.comparison_json or {}
     elif d.deliverable_type == 'final':
         comparison = d.performance.pep_final_comparisons.first()
         target_label = '사업수행계획서 대응비교'
+        if not comparison or comparison.status != 'done':
+            return HttpResponse("대응비교 결과가 없습니다. AI 분석을 먼저 실행해주세요.", status=400)
+        cmp = comparison.comparison_json or {}
+    elif d.deliverable_type == 'tech_apply':
+        tech_result = getattr(d, 'tech_apply_result', None)
+        if not tech_result or not tech_result.result_json:
+            return HttpResponse("검증 결과가 없습니다. AI 분석을 먼저 실행해주세요.", status=400)
     else:
         return HttpResponse("이 산출물 유형은 PDF 리포트를 지원하지 않습니다.", status=400)
-
-    if not comparison or comparison.status != 'done':
-        return HttpResponse("대응비교 결과가 없습니다. AI 분석을 먼저 실행해주세요.", status=400)
-
-    cmp = comparison.comparison_json or {}
 
     # 한국어 폰트 등록 (Windows 맑은 고딕)
     _bundle = Path(__file__).resolve().parent.parent / "assets" / "fonts"
@@ -853,34 +854,52 @@ def deliverable_export_pdf(request, del_id):
 
     buffer = io.BytesIO()
     W = A4[0] - 40 * mm
+    contract = d.performance.contract
+    report_kind = "체크정합성" if d.deliverable_type == 'tech_apply' else "대응비교"
     pdf = SimpleDocTemplate(
         buffer, pagesize=A4,
         leftMargin=20*mm, rightMargin=20*mm,
         topMargin=20*mm, bottomMargin=20*mm,
+        # PDF 내부 제목(메타데이터)도 채워야 브라우저 뷰어 탭에 "(anonymous)" 대신 실제 문서명이 뜬다 
+        # (다운로드 파일명과 별개 — Content-Disposition은 그대로 유지)
+        title=f"{contract.project_name}_{contract.company_name}_{d.get_deliverable_type_display()}_{report_kind}",
     )
 
     story = []
     today = datetime.now(timezone.utc).strftime("%Y년 %m월 %d일")
-    contract = d.performance.contract
 
     # 헤더
-    story.append(Paragraph("AI 대응비교 분석 결과보고서", S["title"]))
-    story.append(Paragraph("Workit — 정보화사업 산출물 AI 대응비교 플랫폼", S["subtitle"]))
+    story.append(Paragraph(
+        "기술적용결과표 AI 검증 결과보고서" if d.deliverable_type == 'tech_apply' else "AI 대응비교 분석 결과보고서",
+        S["title"]
+    ))
+    story.append(Paragraph("Workit — 정보화사업 산출물 AI 분석 플랫폼", S["subtitle"]))
     story.append(HRFlowable(width="100%", thickness=1.5, color=colors.HexColor("#4f46e5")))
     story.append(Spacer(1, 6))
 
-    info = [
-        ["산출물", f"{d.get_deliverable_type_display()} — {d.filename()}"],
-        ["프로젝트명", contract.project_name],
-        ["수행 업체", contract.company_name],
-        ["평가 일자", today],
-        ["비교 대상", target_label],
-        ["분석 요약", (
-            f"충족 {cmp.get('satisfied_count', 0)}건 · "
-            f"검토 {cmp.get('partial_count', 0)}건 · "
-            f"불가 {cmp.get('unsatisfied_count', 0)}건"
-        )],
-    ]
+    if d.deliverable_type == 'tech_apply':
+        rj = tech_result.result_json or {}
+        info = [
+            ["산출물", f"{d.get_deliverable_type_display()} — {d.filename()}"],
+            ["프로젝트명", contract.project_name],
+            ["수행 업체", contract.company_name],
+            ["평가 일자", today],
+            ["검증 기준", "체크박스 선택 정합성(미기재 · 중복기재 · 사유누락)"],
+            ["분석 요약", f"전체 {rj.get('total', 0)}건 중 오류 {rj.get('error_count', 0)}건"],
+        ]
+    else:
+        info = [
+            ["산출물", f"{d.get_deliverable_type_display()} — {d.filename()}"],
+            ["프로젝트명", contract.project_name],
+            ["수행 업체", contract.company_name],
+            ["평가 일자", today],
+            ["비교 대상", target_label],
+            ["분석 요약", (
+                f"충족 {cmp.get('satisfied_count', 0)}건 · "
+                f"검토 {cmp.get('partial_count', 0)}건 · "
+                f"불가 {cmp.get('unsatisfied_count', 0)}건"
+            )],
+        ]
     t = Table(info, colWidths=[28*mm, W - 28*mm])
     t.setStyle(TableStyle([
         ("FONTNAME", (0,0), (-1,-1), FONT),
@@ -897,6 +916,8 @@ def deliverable_export_pdf(request, del_id):
     story.append(t)
     story.append(Spacer(1, 6))
     story.append(Paragraph(
+        "※ 본 보고서는 룰베이스로 자동 생성된 기술적용결과표 체크박스 정합성 검증 결과입니다."
+        if d.deliverable_type == 'tech_apply' else
         "※ 본 보고서는 sLLM이 4개 판정 기준(완전성·정확성·검증가능성·추적성)으로 자동 생성한 "
         "대응비교 의견입니다. 법적 검토는 포함하지 않습니다.",
         S["footer"]
@@ -920,12 +941,29 @@ def deliverable_export_pdf(request, del_id):
                 story.append(Paragraph(f'· {line}', S["body"]))
             story.append(Spacer(1, 4))
 
-    add_group("불가 항목", cmp.get('unsatisfied') or [], 'unsatisfied')
-    add_group("검토 필요 항목", cmp.get('partial') or [], 'partial')
-    add_group("충족 항목", cmp.get('satisfied') or [], 'satisfied')
+    if d.deliverable_type == 'tech_apply':
+        items = (tech_result.result_json or {}).get('items', [])
+        error_items = [it for it in items if it.get('error')]
+        if error_items:
+            story.append(Paragraph(f"오류 항목 ({len(error_items)}건)", S["section"]))
+            for it in error_items:
+                page_no = it.get('page', '-')
+                text = (it.get('item_text') or '').strip() or '(항목명 없음)'
+                story.append(Paragraph(
+                    f'<font color="#dc2626"><b>[{page_no}page]</b></font> <b>{text}</b>',
+                    S["secsub"]
+                ))
+                story.append(Paragraph(f"· {it.get('error')}", S["body"]))
+                story.append(Spacer(1, 4))
+        else:
+            story.append(Paragraph("오류 항목이 발견되지 않았습니다.", S["body"]))
+    else:
+        add_group("불가 항목", cmp.get('unsatisfied') or [], 'unsatisfied')
+        add_group("검토 필요 항목", cmp.get('partial') or [], 'partial')
+        add_group("충족 항목", cmp.get('satisfied') or [], 'satisfied')
 
-    if not (cmp.get('satisfied') or cmp.get('partial') or cmp.get('unsatisfied')):
-        story.append(Paragraph("비교 항목이 없습니다.", S["body"]))
+        if not (cmp.get('satisfied') or cmp.get('partial') or cmp.get('unsatisfied')):
+            story.append(Paragraph("비교 항목이 없습니다.", S["body"]))
 
     # 푸터
     story.append(Spacer(1, 12))
@@ -936,7 +974,8 @@ def deliverable_export_pdf(request, del_id):
     pdf.build(story)
 
     base_name = d.filename().rsplit('.', 1)[0] if d.filename() else d.get_deliverable_type_display()
-    filename = f"{base_name}_대응비교결과.pdf"
+    suffix = "체크정합성결과" if d.deliverable_type == 'tech_apply' else "대응비교결과"
+    filename = f"{base_name}_{suffix}.pdf"
     response = HttpResponse(buffer.getvalue(), content_type="application/pdf")
     # 한글 파일명 인코딩 (RFC 5987)
     from urllib.parse import quote

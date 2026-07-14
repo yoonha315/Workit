@@ -184,6 +184,24 @@ input, textarea { font-family: inherit; font-size: inherit; }
 .btn-file-change { display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; border-radius: 6px; font-size: 12px; font-weight: 500; color: var(--primary); border: 1px solid var(--primary-light); background: var(--primary-light); transition: all var(--transition); white-space: nowrap; flex-shrink: 0; }
 .btn-file-change:hover { background: #dde4ff; }
 .btn-file-upload { color: var(--text-secondary); border-color: var(--border); background: var(--bg); }
+.btn-icon-cal { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; padding: 0; border: 1px solid var(--border); border-radius: 4px; background: #fff; color: var(--text-secondary); cursor: pointer; vertical-align: middle; transition: all var(--transition); }
+.btn-icon-cal:hover { background: var(--primary-light); color: var(--primary); border-color: var(--primary-light); }
+.due-date-picker { z-index: 3000; background: #fff; border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.15); padding: 10px; width: 220px; font-size: 12px; user-select: none; }
+.ddp-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.ddp-header .ddp-label { font-weight: 700; font-size: 13px; }
+.ddp-nav { display: flex; gap: 2px; }
+.ddp-nav button { width: 20px; height: 20px; border: none; background: none; cursor: pointer; color: var(--text-secondary); font-size: 9px; border-radius: 4px; }
+.ddp-nav button:hover { background: var(--primary-light); color: var(--primary); }
+.ddp-dow { display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; color: var(--text-secondary); margin-bottom: 4px; }
+.ddp-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.ddp-day { border: none; background: none; padding: 5px 0; border-radius: 6px; cursor: pointer; color: #333; font-size: 12px; }
+.ddp-day:hover { background: var(--primary-light); }
+.ddp-day.out { color: #ccc; }
+.ddp-day.today { font-weight: 700; color: var(--primary); }
+.ddp-day.sel { background: var(--primary); color: #fff; }
+.ddp-footer { display: flex; justify-content: space-between; margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--border); }
+.ddp-footer button { border: none; background: none; color: var(--primary); font-size: 12px; cursor: pointer; padding: 2px 4px; }
+.ddp-footer button:hover { text-decoration: underline; }
 
 /* ── Forms ── */
 .form-group { margin-bottom: 16px; }

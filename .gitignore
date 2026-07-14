@@ -25,3 +25,8 @@ models/rag/not in use/
 models/
 
 LLM/kanana_*
+
+scripts/security_reports/
+
+var/
+celerybeat-schedule*
