@@ -82,7 +82,7 @@ def contract_create(request):
             log_audit(request, AuditLog.ACTION_UPLOAD, 'contract_document', doc.id, detail=f'{doc_type} 최초 업로드')
 
         return JsonResponse({'status': 'ok', 'id': contract.id, 'name': contract.project_name})
-    return JsonResponse({'status': 'error'}, status=400)
+    return JsonResponse({'status': 'error', 'message': '잘못된 요청입니다.'}, status=400)
 
 
 @login_required
@@ -210,7 +210,8 @@ def document_ai_status(request, task_id):
         return JsonResponse({'state': 'success', **data})
 
     else:
-        return JsonResponse({'state': 'error', 'message': str(result.info)})
+        print(f'[document_ai_status] 작업 실패 (task_id={task_id}, state={result.state}): {result.info}')
+        return JsonResponse({'state': 'error', 'message': 'AI 분석 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.'})
 
 @login_required
 @require_POST
