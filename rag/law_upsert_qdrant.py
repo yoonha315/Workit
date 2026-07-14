@@ -1,13 +1,13 @@
 """
-Workit - fixedid 임베딩 결과 Qdrant 업로드 (upsert)
+Workit - 임베딩 결과 Qdrant 업로드 (upsert)
 파일명: rag/law_upsert_qdrant.py
 
-임베딩(vectors_*.npz, sparse_weights_*.json) + 파싱 결과(chunks_*_fixedid.json)를
+임베딩(vectors_*.npz, sparse_weights_*.json) + 파싱 결과(chunks_*.json)를
 합쳐 Qdrant에 upsert. 검색은 law_rag_pipeline.py 담당 (이 스크립트가 먼저 실행돼
 컬렉션이 존재해야 함).
 
-입력: project_root/data/merged/ 안의 chunks_*_fixedid.json, vectors_*_fixedid.npz,
-      sparse_weights_*_fixedid.json (jo/ho 각각)
+입력: project_root/data/merged/ 안의 chunks_*.json, vectors_*.npz,
+      sparse_weights_*.json (jo/ho 각각)
 출력: Qdrant collection "law_kb_jo", "law_kb_ho"
 
 RECREATE_COLLECTIONS=True(기본값): 매번 컬렉션 삭제 후 재생성 → 소스 JSON에서
@@ -19,6 +19,20 @@ Point id는 chunk_id 해시값(결정론적) — 배열 순서 아님, 매칭은
 사용법:
     pip install qdrant-client
     python rag/law_upsert_qdrant.py
+
+--- 2026-07-14 수정 사항 ---
+1. chunk_id_to_point_id: 내장 hash()는 문자열에 대해 PYTHONHASHSEED에 따라
+   프로세스마다 값이 달라질 수 있어(PEP 456) "결정론적"이 아니었음. hashlib.sha256
+   기반으로 교체 — 실행 환경/시점과 무관하게 같은 chunk_id는 항상 같은 point_id.
+   (RECREATE_COLLECTIONS=True로만 써왔다면 지금까지는 겉으로 드러나지 않았을 버그.
+   RECREATE_COLLECTIONS=False로 skip-upsert 모드를 쓸 계획이 있다면 반드시 필요한 수정.)
+2. (취소됨) 애초엔 article_number를 PAYLOAD_FIELDS에서 제거하려 했음 — law_kb_jo에서
+   article_id와 1,186/1,186 완전 일치해 중복 필드로 보였기 때문. 하지만 grep 결과
+   jihye_inference.py, pdfver_yoonha_contract_rag.py가 payload["article_number"]를
+   직접 읽고 있는 게 확인되어 제거 시 두 파일이 조용히 깨짐(에러 없이 값 누락).
+   또한 law_chunk_reference.py(항/호/목 파서)를 보면 ho 레벨에서는 article_number가
+   article_id보다 세분화된 값(예: "...제3항제2호")을 가질 걸로 보여, jo 레벨 완전
+   일치는 우연일 가능성이 높음. → article_number는 그대로 유지.
 """
 
 from __future__ import annotations
@@ -48,16 +62,16 @@ QDRANT_PORT = int(os.environ.get('QDRANT_PORT', '6333'))
 RECREATE_COLLECTIONS = True
 
 DATASETS = {
-    "jo_fixedid": {
-        "chunks_file": DATA_DIR / "chunks_jo_fixedid.json",
-        "vectors_file": DATA_DIR / "vectors_jo_fixedid.npz",
-        "sparse_file": DATA_DIR / "sparse_weights_jo_fixedid.json",
+    "jo": {
+        "chunks_file": DATA_DIR / "chunks_jo.json",
+        "vectors_file": DATA_DIR / "vectors_jo.npz",
+        "sparse_file": DATA_DIR / "sparse_weights_jo.json",
         "collection": "law_kb_jo",
     },
-    "ho_fixedid": {
-        "chunks_file": DATA_DIR / "chunks_ho_fixedid.json",
-        "vectors_file": DATA_DIR / "vectors_ho_fixedid.npz",
-        "sparse_file": DATA_DIR / "sparse_weights_ho_fixedid.json",
+    "ho": {
+        "chunks_file": DATA_DIR / "chunks_ho.json",
+        "vectors_file": DATA_DIR / "vectors_ho.npz",
+        "sparse_file": DATA_DIR / "sparse_weights_ho.json",
         "collection": "law_kb_ho",
     },
 }
